@@ -1,0 +1,19 @@
+{
+  "gas": {
+    "direction": "up",
+    "adjustment": 3.6,
+    "price": 1.621
+  },
+  "diesel": {
+    "direction": "down",
+    "adjustment": 0.7,
+    "price": 1.544
+  },
+  "notes": "May be +/- 0.1",
+  "source": "reddit",
+  "post_id": "abc123",
+  "post_url": "https://www.reddit.com/r/halifax/comments/abc123/gas_prices_this_week/",
+  "reddit_title": "Gas prices this week",
+  "updated_at": "2024-11-14T17:00:00.000Z",
+  "image_key": "images/abc123.png"
+}

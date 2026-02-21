@@ -1,0 +1,30 @@
+name = "buckit"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+crons = ["0 12 * * 4", "0 14 * * 4", "0 16 * * 4", "0 18 * * 4"]
+
+[[kv_namespaces]]
+binding = "PREDICTIONS"
+id = "07cd82600a824364b919db2c1cbc2663"
+preview_id = "de766f929ed74e999beb5a3676bc3230"
+
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "buckit-images"
+preview_bucket_name = "buckit-images-preview"
+
+[ai]
+binding = "AI"
+
+[vars]
+SITE_URL = "https://hfxgas.ca"
+REDDIT_USER_AGENT = "Buckit/1.0 (github.com/program-the-brain-not-the-heartbeat/buckit)"
+REDDIT_AUTHOR = "buckit"
+REDDIT_SUBREDDIT = "halifax"
+MAX_HISTORY = "10"
+
+# Secrets (set via: task secret)
+# WEBHOOK_SECRET — required for POST /webhook and MCP write tools

@@ -1,0 +1,75 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build VitePress
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync docs to VitePress
+        # Copy all docs/ markdown into vitepress/ before building.
+        # vitepress/ only stores index.md and .vitepress/config.js — everything
+        # else is synced from docs/ here so there's a single source of truth.
+        run: |
+          cp docs/architecture.md      vitepress/architecture.md
+          cp docs/deployment.md        vitepress/deployment.md
+          cp docs/development.md       vitepress/development.md
+          cp docs/webhook.md           vitepress/webhook.md
+          cp docs/mcp.md               vitepress/mcp.md
+          cp docs/seo.md               vitepress/seo.md
+          cp docs/run-your-own.md      vitepress/run-your-own.md
+          cp docs/costs.md             vitepress/costs.md
+          cp docs/buckit-access.md     vitepress/buckit-access.md
+          cp docs/PROJECT_TIMELINE.md  vitepress/project-timeline.md
+          cp TODO.md                   vitepress/todo.md
+          mkdir -p vitepress/adr
+          cp docs/adr/README.md        vitepress/adr/README.md
+          cp docs/adr/001-cloudflare-workers-platform.md    vitepress/adr/001-cloudflare-workers-platform.md
+          cp docs/adr/002-community-context-image-prompts.md vitepress/adr/002-community-context-image-prompts.md
+          cp docs/adr/003-security-headers.md               vitepress/adr/003-security-headers.md
+          cp docs/adr/004-no-query-param-secrets.md         vitepress/adr/004-no-query-param-secrets.md
+          cp docs/adr/005-deploy-gate-ci.md                 vitepress/adr/005-deploy-gate-ci.md
+
+      - name: Build VitePress
+        run: npx vitepress build vitepress
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: vitepress/.vitepress/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

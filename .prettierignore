@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+coverage/
+dist/
+vitepress/.vitepress/dist/
+vitepress/.vitepress/cache/
+*.lock

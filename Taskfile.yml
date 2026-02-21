@@ -1,0 +1,192 @@
+version: '3'
+
+tasks:
+  # ── Setup ──────────────────────────────────────────────────────────────────
+  setup:
+    desc: First-time project setup (install deps + git hooks)
+    cmds:
+      - npm install
+      - npx husky install
+      - echo ""
+      - echo "Next steps to deploy:"
+      - echo "  task kv:create"
+      - echo "  task r2:create"
+      - echo "  task secret"
+      - echo "  task deploy"
+
+  # ── Development ────────────────────────────────────────────────────────────
+  dev:
+    desc: Start local dev server (hot reload)
+    cmd: wrangler dev
+
+  dev:cron:
+    desc: Trigger the cron handler locally and show output
+    cmds:
+      - wrangler dev --test-scheduled &
+      - sleep 2
+      - curl -s "http://localhost:8787/__scheduled" | jq .
+      - pkill -f "wrangler dev" || true
+
+  # ── Testing ────────────────────────────────────────────────────────────────
+  test:
+    desc: Run all tests (178 tests across 2 files)
+    cmd: npx vitest run
+
+  test:watch:
+    desc: Run tests in watch mode (interactive)
+    cmd: npx vitest
+
+  test:ui:
+    desc: Open Vitest UI in browser
+    cmd: npx vitest --ui
+
+  # ── Code Quality ───────────────────────────────────────────────────────────
+  lint:
+    desc: Check for linting errors (ESLint)
+    cmd: npx eslint src/ mcp/ test/
+
+  lint:fix:
+    desc: Auto-fix linting errors where possible
+    cmd: npx eslint src/ mcp/ test/ --fix
+
+  format:
+    desc: Format all source files with Prettier
+    cmd: npx prettier --write "src/**" "mcp/**" "test/**" "*.{json,toml,yml,md,js}"
+
+  format:check:
+    desc: Check formatting without making changes (used in CI)
+    cmd: npx prettier --check "src/**" "mcp/**" "test/**" "*.{json,toml,yml,md,js}"
+
+  check:
+    desc: Run all quality checks (lint + format + test) — same as CI
+    cmds:
+      - task: lint
+      - task: format:check
+      - task: test
+
+  # ── Cloudflare Setup (run once) ────────────────────────────────────────────
+  kv:create:
+    desc: Create the PREDICTIONS KV namespace in Cloudflare
+    cmd: wrangler kv namespace create PREDICTIONS
+
+  r2:create:
+    desc: Create the IMAGES R2 bucket in Cloudflare
+    cmd: wrangler r2 bucket create buckit-images
+
+  secret:
+    desc: Interactively set WEBHOOK_SECRET in Cloudflare
+    cmd: wrangler secret put WEBHOOK_SECRET
+
+  # ── Deployment ─────────────────────────────────────────────────────────────
+  deploy:
+    desc: Deploy to Cloudflare (runs checks first)
+    deps: [check]
+    cmd: wrangler deploy
+
+  deploy:skip-checks:
+    desc: Deploy without running checks (emergency only)
+    cmd: wrangler deploy
+
+  # ── Operations ─────────────────────────────────────────────────────────────
+  logs:
+    desc: Stream live Worker logs from Cloudflare
+    cmd: wrangler tail
+
+  scan:
+    desc: Manually trigger a Reddit scan via MCP (requires WEBHOOK_SECRET env var)
+    cmd: |
+      curl -s -X POST https://hfxgas.ca/mcp \
+        -H "Content-Type: application/json" \
+        -d "{\"method\":\"tools/call\",\"params\":{\"name\":\"trigger_reddit_scan\",\"arguments\":{\"secret\":\"$WEBHOOK_SECRET\"}}}" | jq .
+
+  # ── u/buckit Access ────────────────────────────────────────────────────────
+  # Quick commands for posting a manual prediction update.
+  # Requires: WEBHOOK_SECRET env var set (e.g. in .dev.vars or shell profile)
+  # Usage:    WEBHOOK_SECRET=xxx task buckit:gas -- up 3.6 1.621
+  #           WEBHOOK_SECRET=xxx task buckit:diesel -- down 0.7 1.544
+  #           WEBHOOK_SECRET=xxx task buckit:update -- up 3.6 1.621 down 0.7 1.544
+
+  buckit:gas:
+    desc: "Post a gas-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:gas -- up 3.6 1.621)"
+    cmd: |
+      curl -s -X POST https://hfxgas.ca/webhook \
+        -H "Authorization: Bearer $WEBHOOK_SECRET" \
+        -H "Content-Type: application/json" \
+        -d "{\"gas\":{\"direction\":\"{{.CLI_ARGS | splitList \" \" | first}}\",\"adjustment\":{{.CLI_ARGS | splitList \" \" | rest | first}},\"price\":{{.CLI_ARGS | splitList \" \" | last}}}}" | jq .
+
+  buckit:diesel:
+    desc: "Post a diesel-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:diesel -- down 0.7 1.544)"
+    cmd: |
+      curl -s -X POST https://hfxgas.ca/webhook \
+        -H "Authorization: Bearer $WEBHOOK_SECRET" \
+        -H "Content-Type: application/json" \
+        -d "{\"diesel\":{\"direction\":\"{{.CLI_ARGS | splitList \" \" | first}}\",\"adjustment\":{{.CLI_ARGS | splitList \" \" | rest | first}},\"price\":{{.CLI_ARGS | splitList \" \" | last}}}}" | jq .
+
+  # ── Force / Manual Overrides ───────────────────────────────────────────────
+  refresh:
+    desc: Force-trigger the Reddit scan and redeploy in one step (skip checks)
+    cmds:
+      - task: deploy:skip-checks
+
+  refresh:full:
+    desc: Full refresh — checks + redeploy (safe production update)
+    cmds:
+      - task: check
+      - task: deploy
+
+  # ── Maintenance ────────────────────────────────────────────────────────────
+  clean:
+    desc: Remove build artifacts and node_modules
+    cmd: rm -rf .wrangler/ node_modules/ coverage/ vitepress/.vitepress/dist/ vitepress/.vitepress/cache/
+
+  kv:clear:
+    desc: Clear all KV prediction data (destructive — use with care)
+    cmds:
+      - wrangler kv key delete --binding PREDICTIONS latest_prediction
+      - wrangler kv key delete --binding PREDICTIONS prediction_history
+      - wrangler kv key delete --binding PREDICTIONS latest_image_key
+      - wrangler kv key delete --binding PREDICTIONS last_processed_post_id
+      - echo "KV cleared."
+
+  force:deploy:
+    desc: Force redeploy, skipping all checks (emergency use only)
+    cmd: wrangler deploy
+
+  # ── Docs (VitePress) ───────────────────────────────────────────────────────
+  docs:sync:
+    desc: Sync docs/ markdown into vitepress/ (required before docs:dev or docs:build)
+    cmd: |
+      cp docs/architecture.md      vitepress/architecture.md
+      cp docs/deployment.md        vitepress/deployment.md
+      cp docs/development.md       vitepress/development.md
+      cp docs/webhook.md           vitepress/webhook.md
+      cp docs/mcp.md               vitepress/mcp.md
+      cp docs/seo.md               vitepress/seo.md
+      cp docs/run-your-own.md      vitepress/run-your-own.md
+      cp docs/costs.md             vitepress/costs.md
+      cp docs/buckit-access.md     vitepress/buckit-access.md
+      cp docs/PROJECT_TIMELINE.md  vitepress/project-timeline.md
+      cp TODO.md                   vitepress/todo.md
+      mkdir -p vitepress/adr
+      cp docs/adr/README.md        vitepress/adr/README.md
+      cp docs/adr/001-cloudflare-workers-platform.md     vitepress/adr/001-cloudflare-workers-platform.md
+      cp docs/adr/002-community-context-image-prompts.md vitepress/adr/002-community-context-image-prompts.md
+      cp docs/adr/003-security-headers.md                vitepress/adr/003-security-headers.md
+      cp docs/adr/004-no-query-param-secrets.md          vitepress/adr/004-no-query-param-secrets.md
+      cp docs/adr/005-deploy-gate-ci.md                  vitepress/adr/005-deploy-gate-ci.md
+
+  docs:dev:
+    desc: Sync docs and start VitePress docs dev server
+    cmds:
+      - task: docs:sync
+      - npx vitepress dev vitepress
+
+  docs:build:
+    desc: Sync docs and build VitePress docs for production
+    cmds:
+      - task: docs:sync
+      - npx vitepress build vitepress
+
+  docs:preview:
+    desc: Preview built VitePress docs locally
+    cmd: npx vitepress preview vitepress

@@ -1,0 +1,3 @@
+#!/bin/sh
+npx eslint src/ mcp/ test/
+npx prettier --check "src/**" "mcp/**" "test/**" "*.{json,toml,yml,md,js}"
