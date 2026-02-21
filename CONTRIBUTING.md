@@ -9,7 +9,7 @@ Read [CLAUDE.md](CLAUDE.md) for full project context, architecture, and constrai
 ## Setup
 
 ```sh
-git clone https://github.com/program-the-brain-not-the-heartbeat/buckit
+git clone https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca
 cd buckit
 task setup
 ```

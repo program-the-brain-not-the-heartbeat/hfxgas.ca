@@ -2,7 +2,7 @@
 
 > Halifax gas price prediction display — powered by Cloudflare Workers.
 
-[![CI](https://github.com/program-the-brain-not-the-heartbeat/buckit/actions/workflows/ci.yml/badge.svg)](https://github.com/program-the-brain-not-the-heartbeat/buckit/actions/workflows/ci.yml)
+[![CI](https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca/actions/workflows/ci.yml/badge.svg)](https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-orange.svg)](https://workers.cloudflare.com/)
 
@@ -54,7 +54,7 @@ Full architecture: [docs/architecture.md](docs/architecture.md)
 
 ```sh
 # 1. Clone
-git clone https://github.com/program-the-brain-not-the-heartbeat/buckit
+git clone https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca
 cd buckit
 
 # 2. Install

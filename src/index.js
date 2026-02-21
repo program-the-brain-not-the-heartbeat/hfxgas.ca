@@ -4,7 +4,7 @@
  *
  * Author: program-the-brain-not-the-heartbeat
  * License: MIT
- * Repo: https://github.com/program-the-brain-not-the-heartbeat/buckit
+ * Repo: https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca
  *
  * DISCLAIMER: Prediction data sourced from publicly available Reddit posts by
  * /u/buckit on r/halifax. This site has no affiliation with /u/buckit.
@@ -872,7 +872,7 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
         <p>The prompt is built automatically from two sources: the price direction (up&nbsp;= despair, down&nbsp;= celebration) and the top posts from r/halifax and r/novascotia that week. Whatever Halifax and Nova Scotia are talking about &mdash; potholes, storms, local events &mdash; becomes the backdrop for the meme. Very Canadian.</p>
         <p>Images are stored in <a href="https://developers.cloudflare.com/r2/" rel="noopener noreferrer" target="_blank">Cloudflare R2</a> and served directly from this site with no third-party CDN. The whole thing — Worker, AI, storage — runs on Cloudflare&rsquo;s free tier. The only cost is the domain name.</p>
         <h3>Who made this?</h3>
-        <p>A developer with the moniker <strong>program-the-brain-not-the-heartbeat</strong> from Cape Breton, Nova Scotia who got tired of searching Reddit every Thursday. The source code is open-source (MIT licensed) on <a href="https://github.com/program-the-brain-not-the-heartbeat/buckit" rel="noopener noreferrer" target="_blank">GitHub</a>.</p>
+        <p>A developer with the moniker <strong>program-the-brain-not-the-heartbeat</strong> from Cape Breton, Nova Scotia who got tired of searching Reddit every Thursday. The source code is open-source (MIT licensed) on <a href="https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca" rel="noopener noreferrer" target="_blank">GitHub</a>.</p>
         <h3>Is the data accurate?</h3>
         <p>This site displays community estimates posted by u/buckit. The author of this site has no affiliation with u/buckit and cannot verify the accuracy of the predictions. Prices may be off by a cent or two (&ldquo;May be +/- 0.1&rdquo;). <strong>Not financial advice.</strong> Always confirm at the pump.</p>
         <h3>Privacy</h3>
@@ -916,7 +916,7 @@ get_status</div>
         <p>Full documentation, architecture diagrams, and deployment guide.</p>
         <div class="modal-links">
           <a href="https://program-the-brain-not-the-heartbeat.github.io/buckit" rel="noopener noreferrer" target="_blank">VitePress Docs &#x2192;</a>
-          <a href="https://github.com/program-the-brain-not-the-heartbeat/buckit" rel="noopener noreferrer" target="_blank">GitHub Repository &#x2192;</a>
+          <a href="https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca" rel="noopener noreferrer" target="_blank">GitHub Repository &#x2192;</a>
         </div>
       </div>
     </div>
@@ -1119,7 +1119,7 @@ ${dieselSummary ? `- Diesel: ${dieselSummary}` : ''}
 ## Attribution
 Prediction data by u/buckit on r/halifax (https://www.reddit.com/r/halifax).
 Site by program-the-brain-not-the-heartbeat (https://github.com/program-the-brain-not-the-heartbeat).
-Source code: https://github.com/program-the-brain-not-the-heartbeat/buckit
+Source code: https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca
 `;
 
   return new Response(body, {

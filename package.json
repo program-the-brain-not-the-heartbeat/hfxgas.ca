@@ -8,10 +8,10 @@
   "homepage": "https://hfxgas.ca",
   "repository": {
     "type": "git",
-    "url": "https://github.com/program-the-brain-not-the-heartbeat/buckit"
+    "url": "https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca"
   },
   "bugs": {
-    "url": "https://github.com/program-the-brain-not-the-heartbeat/buckit/issues"
+    "url": "https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca/issues"
   },
   "engines": {
     "node": ">=20"

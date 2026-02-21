@@ -12,7 +12,7 @@ No coding experience required beyond following these steps.
 
 ## Step 1: Fork the Repository
 
-1. Go to [github.com/program-the-brain-not-the-heartbeat/buckit](https://github.com/program-the-brain-not-the-heartbeat/buckit)
+1. Go to [github.com/program-the-brain-not-the-heartbeat/hfxgas.ca](https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca)
 2. Click the **Fork** button in the top right
 3. Click **Create fork** — this copies the project to your own GitHub account
 
