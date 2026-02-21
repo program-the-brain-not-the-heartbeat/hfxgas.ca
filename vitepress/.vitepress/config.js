@@ -10,7 +10,7 @@ export default defineConfig({
       { text: 'Guide', link: '/deployment' },
       { text: 'API', link: '/webhook' },
       { text: 'MCP', link: '/mcp' },
-      { text: 'GitHub', link: 'https://github.com/program-the-brain-not-the-heartbeat/buckit' },
+      { text: 'GitHub', link: 'https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca' },
     ],
     sidebar: [
       {
@@ -52,14 +52,14 @@ export default defineConfig({
       },
     ],
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/program-the-brain-not-the-heartbeat/buckit' },
+      { icon: 'github', link: 'https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca' },
     ],
     footer: {
       message: 'MIT License. No warranties. Not financial advice.',
       copyright: 'program-the-brain-not-the-heartbeat',
     },
     editLink: {
-      pattern: 'https://github.com/program-the-brain-not-the-heartbeat/buckit/edit/main/docs/:path',
+      pattern: 'https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca/edit/main/docs/:path',
       text: 'Edit this page on GitHub',
     },
   },

@@ -21,7 +21,7 @@ binding = "AI"
 
 [vars]
 SITE_URL = "https://hfxgas.ca"
-REDDIT_USER_AGENT = "Buckit/1.0 (github.com/program-the-brain-not-the-heartbeat/buckit)"
+REDDIT_USER_AGENT = "Buckit/1.0 (github.com/program-the-brain-not-the-heartbeat/hfxgas.ca)"
 REDDIT_AUTHOR = "buckit"
 REDDIT_SUBREDDIT = "halifax"
 MAX_HISTORY = "10"

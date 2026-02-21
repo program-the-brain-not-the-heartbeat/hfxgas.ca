@@ -50,7 +50,8 @@
       "Bash(npx vitest run)",
       "Bash(npx wrangler deploy:*)",
       "Bash(npm audit:*)",
-      "mcp__ef570a1c-e447-49a1-94f9-2fd48bca5d86__search_cloudflare_documentation"
+      "mcp__ef570a1c-e447-49a1-94f9-2fd48bca5d86__search_cloudflare_documentation",
+      "Bash(xargs sed:*)"
     ]
   }
 }
