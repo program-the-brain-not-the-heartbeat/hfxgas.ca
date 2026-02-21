@@ -1,0 +1,35 @@
+{
+  "env": {
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "globals": {
+    "fetch": "readonly",
+    "Request": "readonly",
+    "Response": "readonly",
+    "URL": "readonly",
+    "URLSearchParams": "readonly",
+    "Headers": "readonly",
+    "FormData": "readonly",
+    "crypto": "readonly",
+    "TextDecoder": "readonly",
+    "TextEncoder": "readonly",
+    "ReadableStream": "readonly",
+    "WritableStream": "readonly",
+    "TransformStream": "readonly"
+  },
+  "rules": {
+    "no-var": "error",
+    "prefer-const": "error",
+    "eqeqeq": ["error", "always"],
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+    "no-console": "off",
+    "semi": ["error", "always"],
+    "quotes": ["error", "single", { "avoidEscape": true }],
+    "no-trailing-spaces": "error",
+    "eol-last": ["error", "always"]
+  }
+}
