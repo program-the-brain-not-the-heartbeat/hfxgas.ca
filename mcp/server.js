@@ -2,13 +2,13 @@
  * Buckit MCP Server
  *
  * Exposes prediction data from Cloudflare KV via the Model Context Protocol.
- * Uses workers-mcp for Cloudflare Workers transport.
+ * Handles MCP JSON-RPC (tools/call) requests directly over HTTP.
  *
  * Future migration: webmcp (webmcp.dev) — tracked in docs/mcp.md
  *
  * Auth model:
  *   - Read tools (get_*): no auth required — public, same as GET /
- *   - Write/trigger tools: WEBHOOK_SECRET required
+ *   - Write/trigger tools: WEBHOOK_SECRET required (passed as `secret` argument)
  *
  * Claude Desktop config (no key needed for read access):
  *   {
@@ -19,7 +19,14 @@
  */
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { ProxyToSelf } from 'workers-mcp';
+
+const TOOL_NAMES = [
+  'get_latest_prediction',
+  'get_prediction_history',
+  'get_status',
+  'post_prediction',
+  'trigger_reddit_scan',
+];
 
 export class BuckitMCP extends WorkerEntrypoint {
   /**
@@ -139,8 +146,40 @@ export class BuckitMCP extends WorkerEntrypoint {
     return { ok: true, message: 'Reddit scan triggered' };
   }
 
+  /**
+   * HTTP entry point — handles MCP JSON-RPC (tools/call) requests.
+   * GET requests and non-tools/call methods return 404.
+   */
   async fetch(request) {
-    return new ProxyToSelf(this).fetch(request);
+    if (request.method !== 'POST') {
+      return new Response(null, { status: 404 });
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+    }
+
+    const { method, params } = body;
+    if (method === 'tools/call' && params?.name) {
+      const toolName = params.name;
+      const args = params.arguments ?? {};
+
+      if (!TOOL_NAMES.includes(toolName)) {
+        return Response.json({ error: `Unknown tool: ${toolName}` }, { status: 404 });
+      }
+
+      try {
+        const result = await this[toolName](args);
+        return Response.json({ result });
+      } catch (e) {
+        return Response.json({ error: e.message }, { status: 500 });
+      }
+    }
+
+    return new Response(null, { status: 404 });
   }
 }
 
