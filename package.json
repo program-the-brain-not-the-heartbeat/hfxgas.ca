@@ -23,7 +23,7 @@
     "workers-mcp": "^0.0.12"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.15.2",
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@cloudflare/workers-types": "^4.0.0",
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
@@ -33,6 +33,6 @@
     "prettier": "^3.0.0",
     "vitepress": "^1.0.0",
     "vitest": "^4.1.8",
-    "wrangler": "^4.87.0"
+    "wrangler": "^4.103.0"
   }
 }
