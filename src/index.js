@@ -171,8 +171,8 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
   const directionLabel = direction === 'up' ? 'going UP' : 'going DOWN';
   const mood =
     direction === 'up'
-      ? 'suffering, despair, Canadians crying at the pump'
-      : 'celebration, relief, Canadians cheering';
+      ? 'suffering, despair, Nova Scotians crying at the pump'
+      : 'celebration, relief, Nova Scotians cheering at a cheap fill-up';
 
   let contextStr;
   if (communityContext.length > 0) {
@@ -183,22 +183,47 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
       .join('; ');
     contextStr = 'This week in Halifax and Nova Scotia: ' + topics;
   } else {
-    // Fallback: season-based context
+    // Fallback: season-based context with real Nova Scotia locations
     const season = getSeason(date);
     const weatherContexts = {
       winter:
-        'Halifax winter blizzard, heavy snowfall, pothole season, Canadian drivers scraping windshields',
-      spring: 'Halifax spring thaw, potholes everywhere, mud season, April showers',
-      summer: 'Halifax summer road trip, beach vibes, lobster season, sunny Maritime highway',
-      fall: 'Halifax fall foliage, East Coast rain and wind, pre-winter anxiety, foggy Nova Scotia',
+        'Halifax winter blizzard, Quinpool Road buried in snow, Cape Breton Highlands buried under ice, ' +
+        'driver in parka scraping windshield on Barrington Street, pothole season on Gottingen Street',
+      spring:
+        'Halifax spring thaw, crumbling potholes on Bayers Road and Agricola Street, ' +
+        'mud season on the Cabot Trail, April showers flooding Granville Street, South Shore thaw',
+      summer:
+        "Nova Scotia summer road trip, Peggy's Cove Lighthouse, lobster shack on Highway 3, " +
+        'sunny Cabot Trail near Ingonish, busy Charlotte Street in Sydney, beach traffic on Kellys Road Dartmouth',
+      fall:
+        'Nova Scotia fall foliage on the Cabot Trail near Cheticamp, Highway 104 near Truro, ' +
+        'thick Annapolis Valley fog on Commercial Street Kentville, East Coast rain on Grafton Street Halifax',
     };
     contextStr = weatherContexts[season];
   }
 
+  // Pick a random real NS gas station street for variety
+  const stationStreets = [
+    'Quinpool Road Halifax',
+    'Spring Garden Road Halifax',
+    'Barrington Street Halifax',
+    'Gottingen Street Halifax',
+    'Agricola Street Halifax',
+    'Portland Street Dartmouth',
+    'Prince Street Sydney Cape Breton',
+    'Charlotte Street Sydney Cape Breton',
+    'Commercial Street Truro',
+    'Main Street Antigonish',
+  ];
+  const street =
+    stationStreets[Math.abs(postId.charCodeAt(0) + postId.charCodeAt(1)) % stationStreets.length];
+
   return (
-    `Halifax Nova Scotia gas prices ${directionLabel} this week. ${contextStr}. ` +
-    `${mood}. Funny editorial cartoon meme, work-safe, vibrant flat design colours, ` +
-    'bold text space at top, Canadian humour. ' +
+    `Photorealistic meme photograph, Nova Scotia Canada. Gas prices ${directionLabel} this week. ` +
+    `${contextStr}. ${mood}. ` +
+    `Setting: Irving Oil gas station with prominent real red-and-yellow Irving Oil logo on sign, ${street}. ` +
+    'Real legible Nova Scotia street signage, realistic faces, cinematic photography, meme-worthy composition. ' +
+    'No cartoons, no illustrations, no watermarks. ' +
     `Seed context: ${postId.slice(0, 8)}.`
   );
 }
