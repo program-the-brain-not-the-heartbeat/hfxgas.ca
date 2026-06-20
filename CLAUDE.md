@@ -4,7 +4,7 @@ Project context for Claude Code. Read this before making any changes.
 
 ## What This Is
 
-A Cloudflare Worker that monitors r/halifax every Thursday for /u/buckit's weekly gas price prediction post. It parses the post, generates a contextual AI meme image, and serves a display-signage-style website at hfxgas.ca. Fully automated — zero manual intervention required after initial deployment.
+A Cloudflare Worker that monitors r/halifax every hour for /u/buckit's weekly gas price prediction post. It parses the post, generates a contextual AI meme image, and serves a display-signage-style website at hfxgas.ca. Fully automated — zero manual intervention required after initial deployment.
 
 ## Key Commands (use `task`, not npm)
 
@@ -55,7 +55,7 @@ Predictions store both fuel types. Either may be `null`:
 
 ```json
 {
-  "gas":    { "direction": "up|down|no-change|null", "adjustment": 3.6, "price": 1.621 },
+  "gas": { "direction": "up|down|no-change|null", "adjustment": 3.6, "price": 1.621 },
   "diesel": { "direction": "up|down|no-change|null", "adjustment": 0.7, "price": 1.544 },
   "notes": "May be +/- 0.1",
   "source": "reddit|webhook",
@@ -79,21 +79,21 @@ A free-text fallback handles older posts. The look-back window is **7 days** (no
 
 ## File Map
 
-| File | Purpose |
-|------|---------|
-| `src/index.js` | Worker: fetch handler, scheduled handler, all utilities |
-| `mcp/server.js` | MCP server (workers-mcp + WorkerEntrypoint) |
-| `test/index.test.js` | 100% coverage — all routes, cron, utilities |
-| `test/mcp.test.js` | MCP tool tests |
-| `test/fixtures/` | Sample Reddit post + parsed prediction JSON |
-| `wrangler.toml` | Worker config — KV, R2, AI bindings, cron triggers |
-| `Taskfile.yml` | All developer tasks |
-| `vitest.config.js` | Vitest + @cloudflare/vitest-pool-workers config |
-| `docs/` | Source-of-truth markdown docs (synced into vitepress/ at CI time) |
-| `docs/buckit-access.md` | Plain-English guide for u/buckit to post manual updates |
-| `vitepress/` | VitePress site config + index.md only — docs synced from docs/ at CI |
-| `.github/workflows/` | ci.yml, deploy.yml, docs.yml |
-| `TODO.md` | Future ideas and backlog (also published in the docs site) |
+| File                    | Purpose                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| `src/index.js`          | Worker: fetch handler, scheduled handler, all utilities              |
+| `mcp/server.js`         | MCP server (workers-mcp + WorkerEntrypoint)                          |
+| `test/index.test.js`    | 100% coverage — all routes, cron, utilities                          |
+| `test/mcp.test.js`      | MCP tool tests                                                       |
+| `test/fixtures/`        | Sample Reddit post + parsed prediction JSON                          |
+| `wrangler.toml`         | Worker config — KV, R2, AI bindings, cron triggers                   |
+| `Taskfile.yml`          | All developer tasks                                                  |
+| `vitest.config.js`      | Vitest + @cloudflare/vitest-pool-workers config                      |
+| `docs/`                 | Source-of-truth markdown docs (synced into vitepress/ at CI time)    |
+| `docs/buckit-access.md` | Plain-English guide for u/buckit to post manual updates              |
+| `vitepress/`            | VitePress site config + index.md only — docs synced from docs/ at CI |
+| `.github/workflows/`    | ci.yml, deploy.yml, docs.yml                                         |
+| `TODO.md`               | Future ideas and backlog (also published in the docs site)           |
 
 ## Critical Constraints
 

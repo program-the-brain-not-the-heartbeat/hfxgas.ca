@@ -14,6 +14,8 @@
  * Future: webmcp (webmcp.dev) migration planned when Cloudflare Workers support matures.
  */
 
+import { BuckitMCP } from '../mcp/server.js';
+
 // ── Utilities ───────────────────────────────────────────────────────────────
 
 /**
@@ -80,6 +82,23 @@ export function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+/**
+ * Decode common HTML/XML character entities.
+ * Used when parsing Reddit's Atom RSS feed, where post content is entity-encoded.
+ * @param {string} str
+ * @returns {string}
+ */
+export function decodeHtmlEntities(str) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
 /**
@@ -167,7 +186,8 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
     // Fallback: season-based context
     const season = getSeason(date);
     const weatherContexts = {
-      winter: 'Halifax winter blizzard, heavy snowfall, pothole season, Canadian drivers scraping windshields',
+      winter:
+        'Halifax winter blizzard, heavy snowfall, pothole season, Canadian drivers scraping windshields',
       spring: 'Halifax spring thaw, potholes everywhere, mud season, April showers',
       summer: 'Halifax summer road trip, beach vibes, lobster season, sunny Maritime highway',
       fall: 'Halifax fall foliage, East Coast rain and wind, pre-winter anxiety, foggy Nova Scotia',
@@ -178,7 +198,7 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
   return (
     `Halifax Nova Scotia gas prices ${directionLabel} this week. ${contextStr}. ` +
     `${mood}. Funny editorial cartoon meme, work-safe, vibrant flat design colours, ` +
-    `bold text space at top, Canadian humour, no text in image. ` +
+    'bold text space at top, Canadian humour. ' +
     `Seed context: ${postId.slice(0, 8)}.`
   );
 }
@@ -249,7 +269,28 @@ export function parseRedditPost(post) {
     }
   }
 
-  // ── Strategy 2: free-text fallback ─────────────────────────────────────
+  // ── Strategy 2: HTML table (from RSS feed) ─────────────────────────────
+  // Reddit renders markdown tables to HTML in the Atom feed.
+  // Matches: <td align="left">Regular</td><td align="left">DOWN 4.5</td><td align="left">165.2</td>
+  if (!gas && !diesel) {
+    const htmlTableRe =
+      /<td[^>]*>\s*(regular|gas(?:oline)?|diesel)\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*([\d.]+)\s*<\/td>/gi;
+    let hm;
+    while ((hm = htmlTableRe.exec(fullText)) !== null) {
+      const typeRaw = hm[1].toLowerCase();
+      const adjRaw = hm[2];
+      const priceRaw = parseFloat(hm[3]);
+      const priceInDollars = priceRaw > 10 ? priceRaw / 100 : priceRaw;
+      const parsed = parseAdjustment(adjRaw);
+      if (typeRaw === 'diesel') {
+        diesel = { ...parsed, price: isNaN(priceInDollars) ? null : priceInDollars };
+      } else {
+        gas = { ...parsed, price: isNaN(priceInDollars) ? null : priceInDollars };
+      }
+    }
+  }
+
+  // ── Strategy 3: free-text fallback ─────────────────────────────────────
   if (!gas && !diesel) {
     const textLower = fullText.toLowerCase();
     let direction = null;
@@ -263,7 +304,7 @@ export function parseRedditPost(post) {
     let pm;
     while ((pm = priceRe.exec(fullText)) !== null) prices.push(parseFloat(pm[1]));
 
-    const price = prices.length >= 2 ? prices[1] : prices[0] ?? null;
+    const price = prices.length >= 2 ? prices[1] : (prices[0] ?? null);
     const slot = { direction, adjustment: null, price };
 
     if (/diesel/.test(textLower)) {
@@ -273,27 +314,102 @@ export function parseRedditPost(post) {
     }
   }
 
-  // ── Notes: last non-table line of selftext ──────────────────────────────
-  // Strip the markdown table lines; whatever remains is human-written context.
-  const notesLines = selftext
-    .split('\n')
-    .filter((l) => !/^\|/.test(l.trim()) && !/^:-/.test(l.trim()))
-    .join(' ')
-    .trim();
-  const notes = notesLines.length > 0 ? notesLines.slice(0, 500) : null;
+  // ── Notes ──────────────────────────────────────────────────────────────
+  // For HTML selftext (RSS feed): extract text from <p> tags only.
+  // For markdown selftext: filter out pipe-table lines and join the rest.
+  let notesText;
+  if (/<td[^>]*>|<table|<div class="md">/i.test(selftext)) {
+    const pMatches = [...selftext.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
+    notesText = pMatches
+      .map((pm) => pm[1].replace(/<[^>]+>/g, '').trim())
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+  } else {
+    notesText = selftext
+      .split('\n')
+      .filter((l) => !/^\|/.test(l.trim()) && !/^:-/.test(l.trim()))
+      .join(' ')
+      .trim();
+  }
+  const notes = notesText.length > 0 ? notesText.slice(0, 500) : null;
 
   return { gas, diesel, notes };
+}
+
+// ── Reddit RSS Parser ─────────────────────────────────────────────────────────
+
+/**
+ * Parse Reddit's Atom RSS feed XML into an array of post-like objects.
+ * Reddit's JSON API now returns 403; the RSS feed remains publicly accessible.
+ *
+ * Each returned object contains the same fields used downstream by parseRedditPost
+ * and the scheduled handler: { author, title, id, permalink, created_utc, selftext }.
+ * The selftext is the HTML body from inside the post's <div class="md"> block.
+ *
+ * @param {string} xml - Raw Atom feed XML text
+ * @returns {Array<{author:string, title:string, id:string, permalink:string, created_utc:number, selftext:string}>}
+ */
+export function parseRssEntries(xml) {
+  const entries = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let m;
+  while ((m = entryRe.exec(xml)) !== null) {
+    const x = m[1];
+
+    // Author: <author><name>/u/Buckit</name>...</author> → "Buckit"
+    const authorMatch = x.match(/<author[^>]*>[\s\S]*?<name>([^<]+)<\/name>/);
+    const author = authorMatch ? authorMatch[1].replace(/^\/u\//i, '').trim() : '';
+
+    // Title (may contain XML entities)
+    const titleMatch = x.match(/<title>([^<]*)<\/title>/);
+    if (!titleMatch) continue;
+    const title = decodeHtmlEntities(titleMatch[1]);
+
+    // ID: <id>t3_abc123</id> → "abc123"
+    const idMatch = x.match(/<id>(?:t3_)?([a-zA-Z0-9]+)<\/id>/);
+    if (!idMatch) continue;
+    const id = idMatch[1];
+
+    // Permalink from <link href="https://www.reddit.com/r/.../.../">
+    const linkMatch = x.match(/<link[^>]+href="([^"]+)"/);
+    let permalink = '';
+    if (linkMatch) {
+      try {
+        permalink = new URL(linkMatch[1]).pathname;
+      } catch {
+        permalink = linkMatch[1];
+      }
+    }
+
+    // Timestamp: <published>2026-06-18T17:32:59+00:00</published>
+    const publishedMatch = x.match(/<published>([^<]+)<\/published>/);
+    const created_utc = publishedMatch
+      ? Math.floor(new Date(publishedMatch[1]).getTime() / 1000)
+      : 0;
+
+    // Post body: HTML-entity-encoded inside <content type="html">
+    // Reddit wraps the user-authored markdown (rendered to HTML) in <!-- SC_OFF -->...<!-- SC_ON -->
+    const contentMatch = x.match(/<content[^>]*>([\s\S]*?)<\/content>/);
+    const rawContent = contentMatch ? decodeHtmlEntities(contentMatch[1]) : '';
+    const scMatch = rawContent.match(/<!--\s*SC_OFF\s*-->([\s\S]*?)<!--\s*SC_ON\s*-->/);
+    const selftext = scMatch ? scMatch[1].trim() : rawContent;
+
+    entries.push({ author, title, id, permalink, created_utc, selftext });
+  }
+  return entries;
 }
 
 // ── Reddit Scraper ───────────────────────────────────────────────────────────
 
 /**
  * Fetch the latest posts from r/halifax and return the most recent /u/buckit fuel post.
+ * Uses Reddit's Atom RSS feed — the JSON API now returns 403 for unauthenticated requests.
  * @param {object} env
  * @returns {Promise<object|null>}
  */
 async function fetchBuckitPost(env) {
-  const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.json?limit=100`;
+  const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.rss?limit=100`;
   const res = await fetch(url, {
     headers: { 'User-Agent': env.REDDIT_USER_AGENT },
   });
@@ -303,8 +419,8 @@ async function fetchBuckitPost(env) {
     return null;
   }
 
-  const data = await res.json();
-  const posts = data?.data?.children ?? [];
+  const xml = await res.text();
+  const posts = parseRssEntries(xml);
 
   // Match weekly gas posts AND interrupter clause posts (can happen any day).
   // We look back 7 days to avoid missing anything; dedup in scheduled() prevents reprocessing.
@@ -312,14 +428,12 @@ async function fetchBuckitPost(env) {
   const fuelKeywords = /gas|gasoline|diesel|fuel|price|interrupter/i;
 
   return (
-    posts
-      .map((c) => c.data)
-      .find(
-        (p) =>
-          p.author.toLowerCase() === env.REDDIT_AUTHOR.toLowerCase() &&
-          fuelKeywords.test(p.title) &&
-          p.created_utc > sevenDaysAgo
-      ) ?? null
+    posts.find(
+      (p) =>
+        p.author.toLowerCase() === env.REDDIT_AUTHOR.toLowerCase() &&
+        fuelKeywords.test(p.title) &&
+        p.created_utc > sevenDaysAgo
+    ) ?? null
   );
 }
 
@@ -335,11 +449,17 @@ export async function fetchCommunityContext(env) {
   const subreddits = ['halifax', 'novascotia'];
   const results = await Promise.allSettled(
     subreddits.map((sub) =>
-      fetch(`https://www.reddit.com/r/${sub}/top.json?t=week&limit=10`, {
+      fetch(`https://www.reddit.com/r/${sub}/top.rss?t=week&limit=10`, {
         headers: { 'User-Agent': env.REDDIT_USER_AGENT },
       })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => data?.data?.children?.map((c) => c.data.title).filter(Boolean) ?? [])
+        .then((r) => (r.ok ? r.text() : null))
+        .then((xml) => {
+          if (!xml) return [];
+          return parseRssEntries(xml)
+            .filter((p) => p.author.toLowerCase() !== 'buckit')
+            .map((p) => p.title)
+            .filter(Boolean);
+        })
         .catch(() => [])
     )
   );
@@ -355,7 +475,7 @@ export async function fetchCommunityContext(env) {
  * @param {'up'|'down'} direction
  * @param {string[]} communityContext - top post titles from r/halifax + r/novascotia
  * @param {object} env
- * @returns {Promise<string|null>} R2 key of stored image, or null on failure
+ * @returns {Promise<{key: string, prompt: string}|null>} R2 key + prompt used, or null on failure
  */
 async function generateAndStoreImage(postId, direction, communityContext, env) {
   const prompt = buildImagePrompt(direction, postId, communityContext);
@@ -380,7 +500,7 @@ async function generateAndStoreImage(postId, direction, communityContext, env) {
       customMetadata: { postId, direction, generatedAt: new Date().toISOString() },
     });
 
-    return r2Key;
+    return { key: r2Key, prompt };
   } catch (err) {
     console.error('Image generation failed:', err);
     return null;
@@ -419,8 +539,14 @@ export function buildChartData(history) {
     if (h.updated_at) {
       try {
         const d = new Date(h.updated_at);
-        return d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', timeZone: 'America/Halifax' });
-      } catch { /* fall through */ }
+        return d.toLocaleDateString('en-CA', {
+          month: 'short',
+          day: 'numeric',
+          timeZone: 'America/Halifax',
+        });
+      } catch {
+        /* fall through */
+      }
     }
     return `#${i + 1}`;
   });
@@ -443,17 +569,38 @@ function renderFuelCard(type, slot) {
   const isDown = dir === 'down';
   const isNoChange = dir === 'no-change';
 
-  const accentColor = isUp ? 'var(--color-up)' : isDown ? 'var(--color-down)' : 'var(--color-neutral)';
-  const bgColor = isUp ? 'var(--color-up-bg)' : isDown ? 'var(--color-down-bg)' : 'var(--color-neutral-bg)';
-  const borderColor = isUp ? 'var(--color-up-border)' : isDown ? 'var(--color-down-border)' : 'var(--color-neutral-border)';
+  const accentColor = isUp
+    ? 'var(--color-up)'
+    : isDown
+      ? 'var(--color-down)'
+      : 'var(--color-neutral)';
+  const bgColor = isUp
+    ? 'var(--color-up-bg)'
+    : isDown
+      ? 'var(--color-down-bg)'
+      : 'var(--color-neutral-bg)';
+  const borderColor = isUp
+    ? 'var(--color-up-border)'
+    : isDown
+      ? 'var(--color-down-border)'
+      : 'var(--color-neutral-border)';
 
   const arrowChar = isUp ? '↑' : isDown ? '↓' : isNoChange ? '=' : '–';
-  const arrowLabel = isUp ? 'Price going up' : isDown ? 'Price going down' : isNoChange ? 'No change' : 'No prediction';
+  const arrowLabel = isUp
+    ? 'Price going up'
+    : isDown
+      ? 'Price going down'
+      : isNoChange
+        ? 'No change'
+        : 'No prediction';
 
   // Hero: the adjustment delta is the most important number
-  const adjDisplay = (isUp || isDown) && slot?.adjustment != null
-    ? `${isUp ? '+' : '−'}${slot.adjustment.toFixed(1)}¢`
-    : isNoChange ? 'No Change' : '–';
+  const adjDisplay =
+    (isUp || isDown) && slot?.adjustment != null
+      ? `${isUp ? '+' : '−'}${slot.adjustment.toFixed(1)}¢`
+      : isNoChange
+        ? 'No Change'
+        : '–';
 
   const priceDisplay = slot?.price != null ? `$${slot.price.toFixed(3)}/L` : '';
 
@@ -465,7 +612,7 @@ function renderFuelCard(type, slot) {
     ${dirLabelText ? `<span class="fuel-dir-label" style="color:${accentColor};background:${bgColor};border-color:${borderColor}">${escapeHtml(dirLabelText)}</span>` : ''}
   </div>
   <div class="fuel-card-body">
-    <span class="fuel-arrow" aria-label="${escapeHtml(arrowLabel)}" style="color:${accentColor};filter:${(isUp || isDown) ? `drop-shadow(0 0 12px ${accentColor})` : 'none'}">${arrowChar}</span>
+    <span class="fuel-arrow" aria-label="${escapeHtml(arrowLabel)}" style="color:${accentColor};filter:${isUp || isDown ? `drop-shadow(0 0 12px ${accentColor})` : 'none'}">${arrowChar}</span>
     <div class="fuel-numbers">
       <span class="fuel-adj" style="color:${accentColor}">${escapeHtml(adjDisplay)}</span>
       ${priceDisplay ? `<span class="fuel-price">${escapeHtml(priceDisplay)}</span>` : ''}
@@ -479,7 +626,7 @@ function renderFuelCard(type, slot) {
  * @param {{ prediction: object|null, history: object[], imageKey: string|null, siteUrl: string }} opts
  * @returns {string}
  */
-export function renderHtml({ prediction, history, imageKey, siteUrl }) {
+export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt = null }) {
   const p = prediction;
   const hasData = p !== null;
 
@@ -487,23 +634,40 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
   const primaryDir = p?.gas?.direction ?? p?.diesel?.direction ?? null;
   const isUp = primaryDir === 'up';
   const isDown = primaryDir === 'down';
-  const accentColor = isUp ? 'var(--color-up)' : isDown ? 'var(--color-down)' : 'var(--color-neutral)';
+  const accentColor = isUp
+    ? 'var(--color-up)'
+    : isDown
+      ? 'var(--color-down)'
+      : 'var(--color-neutral)';
 
   const updatedAt = formatDate(p?.updated_at ?? null);
   const relativeTime = formatRelativeTime(p?.updated_at ?? null);
   const notesHtml = p?.notes ? `<p class="notes">${escapeHtml(p.notes)}</p>` : '';
 
   // AI image
+  const postLinkHtml = p?.post_url
+    ? ` &middot; <a href="${escapeHtml(p.post_url)}" class="caption-link" target="_blank" rel="noopener noreferrer">View Reddit post ↗</a>`
+    : '';
+  const promptDisclosure = imagePrompt
+    ? `<details class="prompt-details"><summary>View AI prompt</summary><p class="prompt-text">${escapeHtml(imagePrompt)}</p></details>`
+    : '';
   const imageHtml = imageKey
     ? `<section class="image-section" aria-label="AI-generated prediction illustration">
         <div class="image-card">
-          <img
-            src="/images/${escapeHtml(imageKey.replace('images/', ''))}"
-            alt="AI-generated illustration: Halifax gas prices ${isUp ? 'going up' : 'going down'} — ${getSeason(new Date())} scene"
-            loading="lazy"
-            decoding="async"
-            class="prediction-image"
-          />
+          <figure class="image-figure">
+            <img
+              src="/images/${escapeHtml(imageKey.replace('images/', ''))}"
+              alt="AI-generated illustration: Halifax gas prices ${isUp ? 'going up' : 'going down'} — ${getSeason(new Date())} scene"
+              loading="lazy"
+              decoding="async"
+              class="prediction-image"
+            />
+            <figcaption class="image-caption">
+              <span class="ai-badge">AI-generated</span>
+              Made with <a href="https://developers.cloudflare.com/workers-ai/" class="caption-link" target="_blank" rel="noopener noreferrer">Cloudflare Workers AI</a> (<code>@cf/black-forest-labs/flux-1-schnell</code>).${postLinkHtml}
+              ${promptDisclosure}
+            </figcaption>
+          </figure>
         </div>
       </section>`
     : '';
@@ -512,40 +676,69 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
   const chartData = buildChartData(history);
   const chartJson = JSON.stringify(chartData);
   const hasHistory = history.length > 0;
-  const hasChartData = chartData.gasData.some((v) => v !== null) || chartData.dieselData.some((v) => v !== null);
+  const hasChartData =
+    chartData.gasData.some((v) => v !== null) || chartData.dieselData.some((v) => v !== null);
 
   const historyHtml = hasHistory
     ? `<section class="history-section" aria-label="Prediction history">
         <h2 class="section-label">History</h2>
-        ${hasChartData ? `<div class="chart-wrap" aria-label="Price history chart">
+        ${
+          hasChartData
+            ? `<div class="chart-wrap" aria-label="Price history chart">
           <canvas id="historyChart" height="120"></canvas>
-        </div>` : ''}
+        </div>`
+            : ''
+        }
         <ul class="history-list" role="list">
           ${history
             .map((h, i) => {
               const gDir = h.gas?.direction;
               const dDir = h.diesel?.direction;
-              const gArrow = gDir === 'up' ? '↑' : gDir === 'down' ? '↓' : gDir === 'no-change' ? '=' : '–';
-              const dArrow = dDir === 'up' ? '↑' : dDir === 'down' ? '↓' : dDir === 'no-change' ? '=' : '–';
-              const gColor = gDir === 'up' ? 'var(--color-up)' : gDir === 'down' ? 'var(--color-down)' : 'var(--color-neutral)';
-              const dColor = dDir === 'up' ? 'var(--color-up)' : dDir === 'down' ? 'var(--color-down)' : 'var(--color-neutral)';
-              const gasAdj = (gDir === 'up' || gDir === 'down') && h.gas?.adjustment != null
-                ? `${gDir === 'up' ? '+' : '−'}${h.gas.adjustment.toFixed(1)}¢` : '';
-              const dieselAdj = (dDir === 'up' || dDir === 'down') && h.diesel?.adjustment != null
-                ? `${dDir === 'up' ? '+' : '−'}${h.diesel.adjustment.toFixed(1)}¢` : '';
+              const gArrow =
+                gDir === 'up' ? '↑' : gDir === 'down' ? '↓' : gDir === 'no-change' ? '=' : '–';
+              const dArrow =
+                dDir === 'up' ? '↑' : dDir === 'down' ? '↓' : dDir === 'no-change' ? '=' : '–';
+              const gColor =
+                gDir === 'up'
+                  ? 'var(--color-up)'
+                  : gDir === 'down'
+                    ? 'var(--color-down)'
+                    : 'var(--color-neutral)';
+              const dColor =
+                dDir === 'up'
+                  ? 'var(--color-up)'
+                  : dDir === 'down'
+                    ? 'var(--color-down)'
+                    : 'var(--color-neutral)';
+              const gasAdj =
+                (gDir === 'up' || gDir === 'down') && h.gas?.adjustment != null
+                  ? `${gDir === 'up' ? '+' : '−'}${h.gas.adjustment.toFixed(1)}¢`
+                  : '';
+              const dieselAdj =
+                (dDir === 'up' || dDir === 'down') && h.diesel?.adjustment != null
+                  ? `${dDir === 'up' ? '+' : '−'}${h.diesel.adjustment.toFixed(1)}¢`
+                  : '';
               return `
               <li class="history-card" style="animation-delay: ${i * 50}ms">
                 <div class="hc-fuels">
-                  ${h.gas ? `<span class="hc-fuel" style="color:${gColor}" title="Regular gas">
+                  ${
+                    h.gas
+                      ? `<span class="hc-fuel" style="color:${gColor}" title="Regular gas">
                     <span class="hc-arrow">${gArrow}</span>
                     <span class="hc-adj">${gasAdj || (gDir === 'no-change' ? '=' : '')}</span>
                     <span class="hc-price">${h.gas.price != null ? `$${h.gas.price.toFixed(3)}` : ''}</span>
-                  </span>` : ''}
-                  ${h.diesel ? `<span class="hc-fuel hc-fuel--diesel" style="color:${dColor}" title="Diesel">
+                  </span>`
+                      : ''
+                  }
+                  ${
+                    h.diesel
+                      ? `<span class="hc-fuel hc-fuel--diesel" style="color:${dColor}" title="Diesel">
                     <span class="hc-arrow">${dArrow}</span>
                     <span class="hc-adj">${dieselAdj || (dDir === 'no-change' ? '=' : '')}</span>
                     <span class="hc-price">${h.diesel.price != null ? `$${h.diesel.price.toFixed(3)}` : ''}</span>
-                  </span>` : ''}
+                  </span>`
+                      : ''
+                  }
                 </div>
                 <div class="hc-meta">
                   <span class="hc-time">${escapeHtml(formatRelativeTime(h.updated_at))}</span>
@@ -556,11 +749,15 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
             .join('')}
         </ul>
       </section>`
-    : `<section class="history-section" aria-label="Prediction history" style="display:none" aria-hidden="true"></section>`;
+    : '<section class="history-section" aria-label="Prediction history" style="display:none" aria-hidden="true"></section>';
 
-  const ogImage = imageKey ? `${siteUrl}/images/${imageKey.replace('images/', '')}` : `${siteUrl}/og-default.png`;
+  const ogImage = imageKey
+    ? `${siteUrl}/images/${imageKey.replace('images/', '')}`
+    : `${siteUrl}/og-default.png`;
   const gasSummary = p?.gas ? `gas ${p.gas.direction} to $${p.gas.price?.toFixed(3)}/L` : '';
-  const dieselSummary = p?.diesel ? `diesel ${p.diesel.direction} to $${p.diesel.price?.toFixed(3)}/L` : '';
+  const dieselSummary = p?.diesel
+    ? `diesel ${p.diesel.direction} to $${p.diesel.price?.toFixed(3)}/L`
+    : '';
   const summaryParts = [gasSummary, dieselSummary].filter(Boolean).join(', ');
   const description = hasData
     ? `Halifax fuel prices: ${summaryParts || 'update available'}. Community estimate by u/buckit on r/halifax.`
@@ -711,6 +908,15 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
     /* AI image */
     .image-card { background:var(--card); border:1px solid var(--border); border-radius:calc(var(--radius)*2); padding:0.5rem; box-shadow:0 1px 3px hsl(0 0% 0%/0.06),0 4px 12px hsl(0 0% 0%/0.05); }
     .prediction-image { width:100%; border-radius:calc(var(--radius)*1.5); object-fit:cover; }
+    .image-figure { margin:0; }
+    .image-caption { font-size:0.62rem; color:var(--muted-foreground); padding:0.5rem 0.25rem 0.1rem; line-height:1.6; }
+    .ai-badge { display:inline-block; font-family:var(--font-mono); font-size:0.58rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; background:hsl(240 5% 14%); border:1px solid var(--border); border-radius:9999px; padding:0.15rem 0.5rem; margin-right:0.4rem; vertical-align:middle; }
+    .caption-link { color:var(--muted-foreground); text-decoration:underline; text-underline-offset:2px; }
+    .caption-link:hover { color:var(--foreground); }
+    .prompt-details { margin-top:0.4rem; }
+    .prompt-details summary { cursor:pointer; font-family:var(--font-mono); font-size:0.6rem; color:var(--muted-foreground); user-select:none; }
+    .prompt-details summary:hover { color:var(--foreground); }
+    .prompt-text { margin:0.3rem 0 0; font-size:0.6rem; color:var(--muted-foreground); font-style:italic; line-height:1.55; word-break:break-word; }
 
     /* History */
     .section-label { font-size:0.62rem; font-weight:600; color:var(--muted-foreground); text-transform:uppercase; letter-spacing:0.12em; margin-bottom:0.75rem; font-family:var(--font-mono); }
@@ -803,7 +1009,9 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
     <section aria-label="Current gas price prediction">
       <div class="sign-board">
         <div class="sign-inner">
-          ${hasData ? `
+          ${
+            hasData
+              ? `
           <div class="fuel-cards">
             ${renderFuelCard('gas', p.gas)}
             ${renderFuelCard('diesel', p.diesel)}
@@ -814,7 +1022,8 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
             </time>
             ${notesHtml}
           </div>
-          ` : `
+          `
+              : `
           <div class="empty-state">
             <svg class="empty-pump" width="64" height="64" viewBox="0 0 64 64" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
               <rect x="8" y="14" width="30" height="42" rx="3" stroke="currentColor" stroke-width="2.5" fill="none"/>
@@ -828,7 +1037,8 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
             <p>u/buckit posts every Thursday — check back soon!</p>
             <span class="thursday-badge">Updated weekly · Thursdays</span>
           </div>
-          `}
+          `
+          }
           <p class="disclaimer">
             Community estimate by
             <a href="https://www.reddit.com/u/buckit" rel="noopener noreferrer" target="_blank">u/buckit</a>
@@ -864,13 +1074,15 @@ export function renderHtml({ prediction, history, imageKey, siteUrl }) {
       <div class="about-body">
         <h3>What is this?</h3>
         <p>Every Thursday, a Reddit user named <a href="https://www.reddit.com/u/buckit" rel="noopener noreferrer" target="_blank">u/buckit</a> posts the upcoming week&rsquo;s Halifax gas and diesel price predictions to <a href="https://www.reddit.com/r/halifax" rel="noopener noreferrer" target="_blank">r/halifax</a>. This site automatically finds that post, reads the numbers, and displays them in a clean format — so you don&rsquo;t have to dig through Reddit.</p>
+        <p>This project was entirely created, deployed, and maintained solely via AI prompts. The only human interaction was purchasing the domain name. Zero lines of human-written code or documentation.</p>
         <h3>How does it work?</h3>
         <p>A <a href="https://workers.cloudflare.com/" rel="noopener noreferrer" target="_blank">Cloudflare Worker</a> runs four times every Thursday. It fetches the newest posts from r/halifax, looks for u/buckit&rsquo;s prediction, parses the markdown table for regular and diesel prices, then stores the result and updates this page — all automatically, with no human in the loop.</p>
         <p>The site also handles <strong>interrupter clause</strong> posts — when the Nova Scotia Utility and Review Board issues an emergency mid-week rate adjustment, those posts are caught too, any day of the week.</p>
         <h3>The meme image</h3>
         <p>When prices go up or down (not &ldquo;no change&rdquo;), the Worker generates a meme image using <a href="https://developers.cloudflare.com/workers-ai/" rel="noopener noreferrer" target="_blank">Cloudflare Workers AI</a> — specifically the <strong>Flux&nbsp;1&nbsp;Schnell</strong> text-to-image model, which runs entirely in Cloudflare&rsquo;s infrastructure.</p>
-        <p>The prompt is built automatically from two sources: the price direction (up&nbsp;= despair, down&nbsp;= celebration) and the top posts from r/halifax and r/novascotia that week. Whatever Halifax and Nova Scotia are talking about &mdash; potholes, storms, local events &mdash; becomes the backdrop for the meme. Very Canadian.</p>
-        <p>Images are stored in <a href="https://developers.cloudflare.com/r2/" rel="noopener noreferrer" target="_blank">Cloudflare R2</a> and served directly from this site with no third-party CDN. The whole thing — Worker, AI, storage — runs on Cloudflare&rsquo;s free tier. The only cost is the domain name.</p>
+        <p>The prompt is built automatically from two sources: the price direction (up&nbsp;= despair, down&nbsp;= celebration) and the top posts from r/halifax and r/novascotia that week &mdash; excluding u/buckit&rsquo;s own prediction post. Whatever Halifax and Nova Scotia are talking about &mdash; potholes, storms, local events &mdash; becomes the backdrop for the meme. Very Canadian.</p>
+        <p>The caption below each image shows the model used and links back to the Reddit post that triggered the generation. Tap <strong>View AI prompt</strong> to see the exact prompt that was sent to the model.</p>
+        <p>Images are stored in <a href="https://developers.cloudflare.com/r2/" rel="noopener noreferrer" target="_blank">Cloudflare R2</a> and served directly from this site with no third-party CDN. The whole thing — Worker, AI, storage — runs on Cloudflare&rsquo;s free tier. The only cost is the domain name (at wholesale Cloudflare prices).</p>
         <h3>Who made this?</h3>
         <p>A developer with the moniker <strong>program-the-brain-not-the-heartbeat</strong> from Cape Breton, Nova Scotia who got tired of searching Reddit every Thursday. The source code is open-source (MIT licensed) on <a href="https://github.com/program-the-brain-not-the-heartbeat/hfxgas.ca" rel="noopener noreferrer" target="_blank">GitHub</a>.</p>
         <h3>Is the data accurate?</h3>
@@ -1028,17 +1240,18 @@ get_status</div>
 // ── Route Handlers ───────────────────────────────────────────────────────────
 
 async function handleRoot(env) {
-  const [predRaw, histRaw, imageKey] = await Promise.all([
+  const [predRaw, histRaw, imageKey, imagePrompt] = await Promise.all([
     env.PREDICTIONS.get('latest_prediction'),
     env.PREDICTIONS.get('prediction_history'),
     env.PREDICTIONS.get('latest_image_key'),
+    env.PREDICTIONS.get('latest_image_prompt'),
   ]);
 
   const prediction = predRaw ? JSON.parse(predRaw) : null;
   const history = histRaw ? JSON.parse(histRaw) : [];
   const siteUrl = env.SITE_URL ?? 'https://hfxgas.ca';
 
-  const html = renderHtml({ prediction, history, imageKey, siteUrl });
+  const html = renderHtml({ prediction, history, imageKey, imagePrompt, siteUrl });
 
   return new Response(html, {
     headers: {
@@ -1050,8 +1263,11 @@ async function handleRoot(env) {
 
 async function handleApiLatest(env) {
   const raw = await env.PREDICTIONS.get('latest_prediction');
-  if (!raw) return new Response(JSON.stringify(null), { headers: { 'content-type': 'application/json' } });
-  return new Response(raw, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+  if (!raw)
+    return new Response(JSON.stringify(null), { headers: { 'content-type': 'application/json' } });
+  return new Response(raw, {
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+  });
 }
 
 async function handleImage(key, env) {
@@ -1098,8 +1314,12 @@ async function handleLlmsTxt(env) {
   const raw = await env.PREDICTIONS.get('latest_prediction');
   const p = raw ? JSON.parse(raw) : null;
 
-  const gasSummary = p?.gas ? `${p.gas.direction} to $${p.gas.price?.toFixed(3) ?? 'unknown'}/L` : null;
-  const dieselSummary = p?.diesel ? `${p.diesel.direction} to $${p.diesel.price?.toFixed(3) ?? 'unknown'}/L` : null;
+  const gasSummary = p?.gas
+    ? `${p.gas.direction} to $${p.gas.price?.toFixed(3) ?? 'unknown'}/L`
+    : null;
+  const dieselSummary = p?.diesel
+    ? `${p.diesel.direction} to $${p.diesel.price?.toFixed(3) ?? 'unknown'}/L`
+    : null;
 
   const body = `# hfxgas.ca — Halifax Gas Price Prediction
 
@@ -1108,9 +1328,13 @@ async function handleLlmsTxt(env) {
 > Updated every Thursday. Not financial advice. No tracking.
 
 ## Current Prediction
-${p ? `${gasSummary ? `- Regular gas: ${gasSummary}` : ''}
+${
+  p
+    ? `${gasSummary ? `- Regular gas: ${gasSummary}` : ''}
 ${dieselSummary ? `- Diesel: ${dieselSummary}` : ''}
-- Updated: ${p.updated_at}` : 'No prediction available yet.'}
+- Updated: ${p.updated_at}`
+    : 'No prediction available yet.'
+}
 
 ## API Access (no key required)
 - Latest prediction JSON: ${siteUrl}/api/latest
@@ -1134,10 +1358,13 @@ async function handleWebhook(request, env) {
   const url = new URL(request.url);
   if (url.searchParams.has('secret')) {
     console.warn('Webhook: rejected ?secret= query param — use Authorization: Bearer <token>');
-    return new Response(JSON.stringify({ error: 'Use Authorization: Bearer header, not ?secret= query param' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ error: 'Use Authorization: Bearer header, not ?secret= query param' }),
+      {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }
+    );
   }
 
   const authHeader = request.headers.get('authorization') ?? '';
@@ -1172,7 +1399,11 @@ async function handleWebhook(request, env) {
     if (!VALID_DIRECTIONS.includes(slot.direction)) {
       return { error: `${name}.direction must be one of: up, down, no-change` };
     }
-    if (slot.price !== undefined && slot.price !== null && (typeof slot.price !== 'number' || isNaN(slot.price))) {
+    if (
+      slot.price !== undefined &&
+      slot.price !== null &&
+      (typeof slot.price !== 'number' || isNaN(slot.price))
+    ) {
       return { error: `${name}.price must be a number if provided` };
     }
     return null;
@@ -1184,36 +1415,73 @@ async function handleWebhook(request, env) {
   if (body.gas !== undefined || body.diesel !== undefined) {
     // New format
     const gasErr = validateFuelSlot(body.gas, 'gas');
-    if (gasErr) return new Response(JSON.stringify(gasErr), { status: 400, headers: { 'content-type': 'application/json' } });
+    if (gasErr)
+      return new Response(JSON.stringify(gasErr), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
     const dieselErr = validateFuelSlot(body.diesel, 'diesel');
-    if (dieselErr) return new Response(JSON.stringify(dieselErr), { status: 400, headers: { 'content-type': 'application/json' } });
-    gas = body.gas ? { direction: body.gas.direction, adjustment: body.gas.adjustment ?? null, price: body.gas.price ?? null } : null;
-    diesel = body.diesel ? { direction: body.diesel.direction, adjustment: body.diesel.adjustment ?? null, price: body.diesel.price ?? null } : null;
+    if (dieselErr)
+      return new Response(JSON.stringify(dieselErr), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
+    gas = body.gas
+      ? {
+          direction: body.gas.direction,
+          adjustment: body.gas.adjustment ?? null,
+          price: body.gas.price ?? null,
+        }
+      : null;
+    diesel = body.diesel
+      ? {
+          direction: body.diesel.direction,
+          adjustment: body.diesel.adjustment ?? null,
+          price: body.diesel.price ?? null,
+        }
+      : null;
   } else {
     // Legacy format — map to new model
     const { direction, predicted_price, current_price, fuel_type = 'gas' } = body;
     if (!VALID_DIRECTIONS.includes(direction)) {
-      return new Response(JSON.stringify({ error: 'Invalid direction — must be "up", "down", or "no-change"' }), {
-        status: 400, headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ error: 'Invalid direction — must be "up", "down", or "no-change"' }),
+        {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        }
+      );
     }
     if (!['gas', 'diesel'].includes(fuel_type)) {
-      return new Response(JSON.stringify({ error: 'Invalid fuel_type — must be "gas" or "diesel"' }), {
-        status: 400, headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ error: 'Invalid fuel_type — must be "gas" or "diesel"' }),
+        {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        }
+      );
     }
     if (typeof predicted_price !== 'number' || isNaN(predicted_price)) {
       return new Response(JSON.stringify({ error: 'predicted_price must be a number' }), {
-        status: 400, headers: { 'content-type': 'application/json' },
+        status: 400,
+        headers: { 'content-type': 'application/json' },
       });
     }
-    if (current_price !== undefined && (typeof current_price !== 'number' || isNaN(current_price))) {
+    if (
+      current_price !== undefined &&
+      (typeof current_price !== 'number' || isNaN(current_price))
+    ) {
       return new Response(JSON.stringify({ error: 'current_price must be a number if provided' }), {
-        status: 400, headers: { 'content-type': 'application/json' },
+        status: 400,
+        headers: { 'content-type': 'application/json' },
       });
     }
     const slot = { direction, adjustment: null, price: predicted_price };
-    if (fuel_type === 'diesel') { diesel = slot; } else { gas = slot; }
+    if (fuel_type === 'diesel') {
+      diesel = slot;
+    } else {
+      gas = slot;
+    }
   }
 
   const prediction = {
@@ -1235,7 +1503,7 @@ async function handleWebhook(request, env) {
 // ── Fetch Handler ─────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname, method } = { pathname: url.pathname, method: request.method };
 
@@ -1277,7 +1545,10 @@ export default {
       response = await handleWebhook(request, env);
     }
 
-    // /mcp — handled by MCP server (separate entrypoint in wrangler.toml)
+    // /mcp — MCP server (workers-mcp)
+    else if (pathname.startsWith('/mcp')) {
+      return new BuckitMCP(ctx, env).fetch(request);
+    }
 
     // 404
     else {
@@ -1334,22 +1605,37 @@ export default {
       updated_at: new Date().toISOString(),
     };
 
-    // Generate image using gas direction (primary), fallback to diesel
-    const imageDirection = parsed.gas?.direction ?? parsed.diesel?.direction;
-    const actionableDirection = imageDirection === 'up' || imageDirection === 'down' ? imageDirection : null;
+    // Generate image using gas direction (primary), fallback to diesel.
+    // Must check explicitly for 'up'/'down' — 'no-change' is truthy but not actionable.
+    const actionableDirection =
+      parsed.gas?.direction === 'up' || parsed.gas?.direction === 'down'
+        ? parsed.gas.direction
+        : parsed.diesel?.direction === 'up' || parsed.diesel?.direction === 'down'
+          ? parsed.diesel.direction
+          : null;
     if (actionableDirection) {
-      const imageKey = await generateAndStoreImage(post.id, actionableDirection, communityContext, env);
-      if (imageKey) {
-        await env.PREDICTIONS.put('latest_image_key', imageKey);
-        prediction.image_key = imageKey;
+      const imageResult = await generateAndStoreImage(
+        post.id,
+        actionableDirection,
+        communityContext,
+        env
+      );
+      if (imageResult) {
+        await env.PREDICTIONS.put('latest_image_key', imageResult.key);
+        await env.PREDICTIONS.put('latest_image_prompt', imageResult.prompt);
+        prediction.image_key = imageResult.key;
       }
     }
 
     await writePrediction(prediction, env);
     await env.PREDICTIONS.put('last_processed_post_id', post.id);
 
-    const gasSummary = parsed.gas ? `gas=${parsed.gas.direction} $${parsed.gas.price?.toFixed(3)}` : 'gas=none';
-    const dieselSummary = parsed.diesel ? `diesel=${parsed.diesel.direction} $${parsed.diesel.price?.toFixed(3)}` : 'diesel=none';
+    const gasSummary = parsed.gas
+      ? `gas=${parsed.gas.direction} $${parsed.gas.price?.toFixed(3)}`
+      : 'gas=none';
+    const dieselSummary = parsed.diesel
+      ? `diesel=${parsed.diesel.direction} $${parsed.diesel.price?.toFixed(3)}`
+      : 'diesel=none';
     console.log(`Cron: done — ${gasSummary}, ${dieselSummary}`);
   },
 };

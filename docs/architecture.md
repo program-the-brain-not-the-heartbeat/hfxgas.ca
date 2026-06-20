@@ -79,14 +79,7 @@ graph LR
 
 ## Cron Schedule
 
-Four Thursday windows to catch /u/buckit's post regardless of when it's published. The cron also fires on demand — the 7-day look-back window means **interrupter clause posts** (mid-week emergency rate adjustments) are caught on any day:
-
-| UTC | Halifax (AST/ADT) |
-|-----|-------------------|
-| 12:00 | 9:00 AM |
-| 14:00 | 11:00 AM |
-| 16:00 | 1:00 PM |
-| 18:00 | 3:00 PM |
+Runs **every hour** (`0 * * * *`), 24/7. This ensures new posts — including mid-week **interrupter clause** adjustments — are picked up within an hour of being published.
 
 Each run is idempotent — `last_processed_post_id` in KV prevents double-processing. Posts within the last **7 days** are eligible (not just 24 hours) to handle interrupter clauses on any weekday.
 
@@ -141,17 +134,17 @@ Either `gas` or `diesel` may be `null` if not present in the post.
 
 ### KV Namespace: `PREDICTIONS`
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `latest_prediction` | JSON | Current prediction + metadata |
-| `prediction_history` | JSON array | Last 10 predictions, newest first |
-| `latest_image_key` | string | R2 key of latest AI image |
-| `last_processed_post_id` | string | Dedup: ID of last processed Reddit post |
+| Key                      | Type       | Description                             |
+| ------------------------ | ---------- | --------------------------------------- |
+| `latest_prediction`      | JSON       | Current prediction + metadata           |
+| `prediction_history`     | JSON array | Last 10 predictions, newest first       |
+| `latest_image_key`       | string     | R2 key of latest AI image               |
+| `last_processed_post_id` | string     | Dedup: ID of last processed Reddit post |
 
 ### R2 Bucket: `IMAGES`
 
-| Key | Description |
-|-----|-------------|
+| Key                    | Description      |
+| ---------------------- | ---------------- |
 | `images/{post_id}.png` | AI-generated PNG |
 
 ### Workers AI
@@ -183,6 +176,7 @@ The image key is also embedded in the prediction JSON as `image_key` and used fo
 ## Reddit Detection
 
 Post must match all criteria:
+
 - `post.author.toLowerCase() === 'buckit'` (case-insensitive — handles both `buckit` on r/halifax and `Buckit` on r/NovaScotia)
 - Title contains: `gas`, `gasoline`, `diesel`, `fuel`, `price`, or `interrupter`
 - `created_utc` within last **7 days**
