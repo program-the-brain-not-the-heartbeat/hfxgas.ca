@@ -9,7 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [1.1.0] — 2026-06-20
+
+### Fixed
+
+- **Reddit API 403 — switched from JSON to RSS** ([post-mortem](RETROSPECTIVE.md#2026-06-20-reddit-api-403-outage))
+  Reddit began returning `403 Forbidden` on all unauthenticated JSON endpoints (`/r/halifax/new.json`, `/r/novascotia/top.json`). The site silently stopped updating; the last successful scrape was ~22 days ago. The fix migrates every Reddit fetch to the public Atom RSS feed (`new.rss`, `top.rss`), which remains accessible without authentication.
+  - `fetchBuckitPost()`: fetches `new.rss` instead of `new.json`
+  - `fetchCommunityContext()`: fetches `top.rss` instead of `top.json`
+  - Added `parseRssEntries(xml)`: parses Reddit's Atom feed XML into post objects (handles entity encoding, `SC_OFF/SC_ON` body markers, `t3_` ID prefix stripping)
+  - Added `decodeHtmlEntities(str)`: decodes XML/HTML character entities present in RSS content
+  - `parseRedditPost()`: added Strategy 2 — HTML table parsing for `<td>`-based tables that Reddit renders in the RSS feed body; added HTML-aware notes extraction via `<p>` tags
+
 ### Added
+
+- `decodeHtmlEntities()` utility (exported) — decodes `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`, and numeric `&#N;` entities
+- `parseRssEntries()` utility (exported) — parses Reddit Atom feed XML into `{author, title, id, permalink, created_utc, selftext}` objects
+- 52 new tests covering `decodeHtmlEntities`, `parseRssEntries`, HTML table parsing in `parseRedditPost`, and RSS-based mocks for `fetchCommunityContext` and `scheduled()` — total test count: 207
+
+---
+
+## [1.0.0] — Initial release
+
+### Added
+
 - Initial project scaffold
 - Cloudflare Worker with `fetch()` and `scheduled()` handlers
 - Reddit scraper: detects /u/buckit fuel price posts on r/halifax (case-insensitive author match, 7-day window for interrupter clauses)

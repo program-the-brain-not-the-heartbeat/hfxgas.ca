@@ -43,14 +43,14 @@ The webhook accepts two formats: the **new dual-fuel format** (preferred) and th
 
 Either `gas` or `diesel` (or both) may be omitted — pass only what you know.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `gas` | object | No | Regular gas prediction slot |
-| `gas.direction` | `"up"` \| `"down"` \| `"no-change"` | Yes (if gas present) | Price direction |
-| `gas.adjustment` | number | No | Change in cents (e.g. `3.6` for +3.6¢) |
-| `gas.price` | number | No | New minimum price per litre in dollars (e.g. `1.621`) |
-| `diesel` | object | No | Diesel prediction slot (same fields as gas) |
-| `notes` | string | No | Optional context (max 500 chars) |
+| Field            | Type                                | Required             | Description                                           |
+| ---------------- | ----------------------------------- | -------------------- | ----------------------------------------------------- |
+| `gas`            | object                              | No                   | Regular gas prediction slot                           |
+| `gas.direction`  | `"up"` \| `"down"` \| `"no-change"` | Yes (if gas present) | Price direction                                       |
+| `gas.adjustment` | number                              | No                   | Change in cents (e.g. `3.6` for +3.6¢)                |
+| `gas.price`      | number                              | No                   | New minimum price per litre in dollars (e.g. `1.621`) |
+| `diesel`         | object                              | No                   | Diesel prediction slot (same fields as gas)           |
+| `notes`          | string                              | No                   | Optional context (max 500 chars)                      |
 
 ### Legacy Format (backward compatible)
 
@@ -64,13 +64,13 @@ Either `gas` or `diesel` (or both) may be omitted — pass only what you know.
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `direction` | `"up"` \| `"down"` \| `"no-change"` | Yes | Price direction |
-| `predicted_price` | number | Yes | Predicted price per litre |
-| `current_price` | number | No | Current price per litre |
-| `fuel_type` | `"gas"` \| `"diesel"` | No | Defaults to `"gas"` |
-| `notes` | string | No | Optional note (max 500 chars) |
+| Field             | Type                                | Required | Description                   |
+| ----------------- | ----------------------------------- | -------- | ----------------------------- |
+| `direction`       | `"up"` \| `"down"` \| `"no-change"` | Yes      | Price direction               |
+| `predicted_price` | number                              | Yes      | Predicted price per litre     |
+| `current_price`   | number                              | No       | Current price per litre       |
+| `fuel_type`       | `"gas"` \| `"diesel"`               | No       | Defaults to `"gas"`           |
+| `notes`           | string                              | No       | Optional note (max 500 chars) |
 
 ## Response
 
@@ -100,11 +100,11 @@ Either `gas` or `diesel` (or both) may be omitted — pass only what you know.
 
 ### Error Responses
 
-| Status | Reason |
-|--------|--------|
-| 400 | `?secret=` query parameter used — must use `Authorization: Bearer` header |
-| 400 | Invalid JSON, invalid `direction`, invalid `fuel_type`, or non-number price |
-| 401 | Missing or incorrect `WEBHOOK_SECRET` |
+| Status | Reason                                                                      |
+| ------ | --------------------------------------------------------------------------- |
+| 400    | `?secret=` query parameter used — must use `Authorization: Bearer` header   |
+| 400    | Invalid JSON, invalid `direction`, invalid `fuel_type`, or non-number price |
+| 401    | Missing or incorrect `WEBHOOK_SECRET`                                       |
 
 ## Examples
 
@@ -153,3 +153,46 @@ task secret
 ```
 
 Enter a long random string. Store it in a password manager.
+
+## Rotating the Secret
+
+Rotate `WEBHOOK_SECRET` if it was ever exposed (committed to git, shared in a message, seen in logs, etc.).
+
+### 1. Generate a new secret
+
+Use a password manager, or generate one in your terminal:
+
+```sh
+# macOS / Linux / Git Bash
+openssl rand -base64 32
+
+# PowerShell
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 }))
+```
+
+### 2. Update Cloudflare
+
+```sh
+task secret
+```
+
+Enter the new secret when prompted. Cloudflare deploys it instantly — the old secret stops working immediately after this step.
+
+### 3. Update GitHub Actions
+
+In your repository: **Settings → Secrets and variables → Actions → `WEBHOOK_SECRET`** → Update.
+
+> If you don't have `WEBHOOK_SECRET` stored as a GitHub Actions secret (it's only needed if your CI/CD pipeline calls the webhook), skip this step.
+
+### 4. Update your local `.dev.vars`
+
+```sh
+# .dev.vars (never commit this file)
+WEBHOOK_SECRET=your-new-secret-here
+```
+
+### 5. Update any stored copies
+
+Update the secret anywhere else it's stored — password manager entries, Claude Desktop MCP config, etc.
+
+> **Note:** There is no grace period. The old secret is rejected the moment step 2 completes. Coordinate with anyone who uses the webhook before rotating.

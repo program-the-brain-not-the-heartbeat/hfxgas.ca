@@ -74,7 +74,14 @@ export class BuckitMCP extends WorkerEntrypoint {
    * @returns {Promise<object>}
    */
   async post_prediction(args) {
-    const { direction, predicted_price, current_price, fuel_type = 'gas', notes = null, secret } = args;
+    const {
+      direction,
+      predicted_price,
+      current_price,
+      fuel_type = 'gas',
+      notes = null,
+      secret,
+    } = args;
 
     if (!secret || secret !== this.env.WEBHOOK_SECRET) {
       return { error: 'Unauthorized', status: 401 };

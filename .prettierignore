@@ -5,3 +5,4 @@ dist/
 vitepress/.vitepress/dist/
 vitepress/.vitepress/cache/
 *.lock
+*.toml

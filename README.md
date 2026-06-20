@@ -77,19 +77,19 @@ Non-technical? See [docs/run-your-own.md](docs/run-your-own.md).
 
 All interactions go through `task`. No npm scripts.
 
-| Command | Description |
-|---------|-------------|
-| `task setup` | First-time install + git hooks |
-| `task dev` | Local dev server |
-| `task dev:cron` | Test cron handler locally |
-| `task test` | Run tests with coverage |
-| `task check` | Lint + format check + test (CI gate) |
-| `task deploy` | Deploy (runs check first) |
-| `task logs` | Stream live Worker logs |
-| `task refresh` | Force redeploy (emergency) |
-| `task refresh:full` | Checks + redeploy |
-| `task kv:clear` | Clear KV data (destructive) |
-| `task docs:dev` | VitePress docs dev server |
+| Command             | Description                          |
+| ------------------- | ------------------------------------ |
+| `task setup`        | First-time install + git hooks       |
+| `task dev`          | Local dev server                     |
+| `task dev:cron`     | Test cron handler locally            |
+| `task test`         | Run tests with coverage              |
+| `task check`        | Lint + format check + test (CI gate) |
+| `task deploy`       | Deploy (runs check first)            |
+| `task logs`         | Stream live Worker logs              |
+| `task refresh`      | Force redeploy (emergency)           |
+| `task refresh:full` | Checks + redeploy                    |
+| `task kv:clear`     | Clear KV data (destructive)          |
+| `task docs:dev`     | VitePress docs dev server            |
 
 ---
 
@@ -312,16 +312,16 @@ Full MCP docs: [docs/mcp.md](docs/mcp.md)
 
 ## Tech Stack
 
-| Layer | Tech |
-|-------|------|
-| Runtime | Cloudflare Workers (plain JavaScript) |
-| Storage | Cloudflare KV + R2 |
-| AI | Cloudflare Workers AI |
-| MCP | workers-mcp (future: webmcp) |
-| Testing | Vitest + @cloudflare/vitest-pool-workers |
-| DX | Taskfile, ESLint, Prettier, Husky, commitlint |
-| Docs | VitePress (GitHub Pages) |
-| CI/CD | GitHub Actions |
+| Layer   | Tech                                          |
+| ------- | --------------------------------------------- |
+| Runtime | Cloudflare Workers (plain JavaScript)         |
+| Storage | Cloudflare KV + R2                            |
+| AI      | Cloudflare Workers AI                         |
+| MCP     | workers-mcp (future: webmcp)                  |
+| Testing | Vitest + @cloudflare/vitest-pool-workers      |
+| DX      | Taskfile, ESLint, Prettier, Husky, commitlint |
+| Docs    | VitePress (GitHub Pages)                      |
+| CI/CD   | GitHub Actions                                |
 
 **Cost: ~$0/month** (Cloudflare free tier). Domain ~$15 CAD/year.
 
