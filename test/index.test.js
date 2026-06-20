@@ -37,7 +37,10 @@ function makeRssXml(posts = []) {
   const entries = posts
     .map((p) => {
       const author = p.author ?? 'unknown';
-      const title = (p.title ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const title = (p.title ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
       const id = p.id ?? 'unknown';
       const permalink = p.permalink ?? '/r/halifax/comments/unknown/';
       const published = p.created_utc
@@ -92,13 +95,22 @@ describe('parseRssEntries', () => {
   const basePublished = '2026-06-18T17:32:59+00:00';
   const baseUtc = Math.floor(new Date(basePublished).getTime() / 1000);
 
-  function singleEntryXml({ author = 'buckit', title = 'Weekly Gas Post', id = 'abc123', selftext = '' } = {}) {
-    return makeRssXml([{
-      author, title, id,
-      permalink: `/r/halifax/comments/${id}/gas_post/`,
-      created_utc: baseUtc,
-      selftext,
-    }]);
+  function singleEntryXml({
+    author = 'buckit',
+    title = 'Weekly Gas Post',
+    id = 'abc123',
+    selftext = '',
+  } = {}) {
+    return makeRssXml([
+      {
+        author,
+        title,
+        id,
+        permalink: `/r/halifax/comments/${id}/gas_post/`,
+        created_utc: baseUtc,
+        selftext,
+      },
+    ]);
   }
 
   it('parses author (strips /u/ prefix)', () => {
@@ -138,8 +150,22 @@ describe('parseRssEntries', () => {
 
   it('returns multiple entries', () => {
     const xml = makeRssXml([
-      { author: 'user1', title: 'Post A', id: 'aaa', permalink: '/r/h/comments/aaa/', created_utc: baseUtc, selftext: '' },
-      { author: 'user2', title: 'Post B', id: 'bbb', permalink: '/r/h/comments/bbb/', created_utc: baseUtc, selftext: '' },
+      {
+        author: 'user1',
+        title: 'Post A',
+        id: 'aaa',
+        permalink: '/r/h/comments/aaa/',
+        created_utc: baseUtc,
+        selftext: '',
+      },
+      {
+        author: 'user2',
+        title: 'Post B',
+        id: 'bbb',
+        permalink: '/r/h/comments/bbb/',
+        created_utc: baseUtc,
+        selftext: '',
+      },
     ]);
     const entries = parseRssEntries(xml);
     expect(entries).toHaveLength(2);
@@ -148,10 +174,16 @@ describe('parseRssEntries', () => {
   });
 
   it('decodes HTML entities in title', () => {
-    const xml = makeRssXml([{
-      author: 'user', title: 'AT&T news', id: 'x1',
-      permalink: '/r/h/comments/x1/', created_utc: baseUtc, selftext: '',
-    }]);
+    const xml = makeRssXml([
+      {
+        author: 'user',
+        title: 'AT&T news',
+        id: 'x1',
+        permalink: '/r/h/comments/x1/',
+        created_utc: baseUtc,
+        selftext: '',
+      },
+    ]);
     // makeRssXml encodes the & in the title; parseRssEntries should decode it back
     const entries = parseRssEntries(xml);
     expect(entries[0].title).toBe('AT&T news');
@@ -304,8 +336,20 @@ describe('fetchCommunityContext', () => {
       ok: true,
       text: async () =>
         makeRssXml([
-          { author: 'user1', title: 'Pothole on Quinpool', id: 'p1', permalink: '/r/h/comments/p1/', created_utc: now },
-          { author: 'user2', title: 'Bridge closure update', id: 'p2', permalink: '/r/h/comments/p2/', created_utc: now },
+          {
+            author: 'user1',
+            title: 'Pothole on Quinpool',
+            id: 'p1',
+            permalink: '/r/h/comments/p1/',
+            created_utc: now,
+          },
+          {
+            author: 'user2',
+            title: 'Bridge closure update',
+            id: 'p2',
+            permalink: '/r/h/comments/p2/',
+            created_utc: now,
+          },
         ]),
     });
     const titles = await fetchCommunityContext(mockEnv);
@@ -332,7 +376,13 @@ describe('fetchCommunityContext', () => {
         ok: true,
         text: async () =>
           makeRssXml([
-            { author: 'user1', title: 'Nova Scotia ferry news', id: 'q1', permalink: '/r/ns/comments/q1/', created_utc: now },
+            {
+              author: 'user1',
+              title: 'Nova Scotia ferry news',
+              id: 'q1',
+              permalink: '/r/ns/comments/q1/',
+              created_utc: now,
+            },
           ]),
       });
     });
@@ -346,9 +396,27 @@ describe('fetchCommunityContext', () => {
       ok: true,
       text: async () =>
         makeRssXml([
-          { author: 'user1', title: 'Valid post', id: 'r1', permalink: '/r/h/comments/r1/', created_utc: now },
-          { author: 'user2', title: '', id: 'r2', permalink: '/r/h/comments/r2/', created_utc: now },
-          { author: 'user3', title: 'Another valid post', id: 'r3', permalink: '/r/h/comments/r3/', created_utc: now },
+          {
+            author: 'user1',
+            title: 'Valid post',
+            id: 'r1',
+            permalink: '/r/h/comments/r1/',
+            created_utc: now,
+          },
+          {
+            author: 'user2',
+            title: '',
+            id: 'r2',
+            permalink: '/r/h/comments/r2/',
+            created_utc: now,
+          },
+          {
+            author: 'user3',
+            title: 'Another valid post',
+            id: 'r3',
+            permalink: '/r/h/comments/r3/',
+            created_utc: now,
+          },
         ]),
     });
     const titles = await fetchCommunityContext(mockEnv);
@@ -384,10 +452,34 @@ describe('fetchCommunityContext', () => {
       ok: true,
       text: async () =>
         makeRssXml([
-          { author: 'someuser', title: 'Pothole on Quinpool', id: 's1', permalink: '/r/h/comments/s1/', created_utc: now },
-          { author: 'buckit', title: 'Gas prices going up — fill up tonight', id: 's2', permalink: '/r/h/comments/s2/', created_utc: now },
-          { author: 'Buckit', title: 'Bridge closure update', id: 's3', permalink: '/r/h/comments/s3/', created_utc: now },
-          { author: 'anotheruser', title: 'Storm watch this weekend', id: 's4', permalink: '/r/h/comments/s4/', created_utc: now },
+          {
+            author: 'someuser',
+            title: 'Pothole on Quinpool',
+            id: 's1',
+            permalink: '/r/h/comments/s1/',
+            created_utc: now,
+          },
+          {
+            author: 'buckit',
+            title: 'Gas prices going up — fill up tonight',
+            id: 's2',
+            permalink: '/r/h/comments/s2/',
+            created_utc: now,
+          },
+          {
+            author: 'Buckit',
+            title: 'Bridge closure update',
+            id: 's3',
+            permalink: '/r/h/comments/s3/',
+            created_utc: now,
+          },
+          {
+            author: 'anotheruser',
+            title: 'Storm watch this weekend',
+            id: 's4',
+            permalink: '/r/h/comments/s4/',
+            created_utc: now,
+          },
         ]),
     });
     const titles = await fetchCommunityContext(mockEnv);
@@ -554,7 +646,8 @@ describe('parseRedditPost', () => {
 
   // ── HTML table format (from RSS feed) ──────────────────────────────────────
   it('HTML table: parses gas up and diesel down', () => {
-    const selftext = '<div class="md"><table><thead><tr><th>Type</th><th>Adjustment</th><th>New Min Price</th></tr></thead><tbody><tr><td align="left">Regular</td><td align="left">DOWN 4.5</td><td align="left">165.2</td></tr><tr><td align="left">Diesel</td><td align="left">DOWN 1.1</td><td align="left">185.4</td></tr></tbody></table><p>May be up/down .01</p></div>';
+    const selftext =
+      '<div class="md"><table><thead><tr><th>Type</th><th>Adjustment</th><th>New Min Price</th></tr></thead><tbody><tr><td align="left">Regular</td><td align="left">DOWN 4.5</td><td align="left">165.2</td></tr><tr><td align="left">Diesel</td><td align="left">DOWN 1.1</td><td align="left">185.4</td></tr></tbody></table><p>May be up/down .01</p></div>';
     const r = parseRedditPost({ title: 'Weekly Gas Post', selftext });
     expect(r.gas.direction).toBe('down');
     expect(r.gas.adjustment).toBeCloseTo(4.5);
@@ -565,26 +658,30 @@ describe('parseRedditPost', () => {
   });
 
   it('HTML table: converts cent prices to dollars', () => {
-    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
+    const selftext =
+      '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
     const r = parseRedditPost({ title: 'Gas', selftext });
     expect(r.gas.price).toBeCloseTo(1.621);
   });
 
   it('HTML table: no-change direction', () => {
-    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>NO CHANGE</td><td>162.1</td></tr></tbody></table></div>';
+    const selftext =
+      '<div class="md"><table><tbody><tr><td>Regular</td><td>NO CHANGE</td><td>162.1</td></tr></tbody></table></div>';
     const r = parseRedditPost({ title: 'Gas', selftext });
     expect(r.gas.direction).toBe('no-change');
     expect(r.gas.adjustment).toBe(0);
   });
 
   it('HTML table: extracts notes from <p> tag', () => {
-    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table><p>May be up/down .01</p></div>';
+    const selftext =
+      '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table><p>May be up/down .01</p></div>';
     const r = parseRedditPost({ title: 'Gas', selftext });
     expect(r.notes).toBe('May be up/down .01');
   });
 
   it('HTML table: notes null when no <p> tag', () => {
-    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
+    const selftext =
+      '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
     const r = parseRedditPost({ title: 'Gas', selftext });
     expect(r.notes).toBeNull();
   });
@@ -1366,8 +1463,20 @@ describe('scheduled()', () => {
       }
       // top.rss (community context) — return a couple of sample titles
       const xml = makeRssXml([
-        { author: 'user1', title: 'Pothole on Quinpool', id: 'ctx1', permalink: '/r/h/comments/ctx1/', created_utc: now },
-        { author: 'user2', title: 'Bridge closure update', id: 'ctx2', permalink: '/r/h/comments/ctx2/', created_utc: now },
+        {
+          author: 'user1',
+          title: 'Pothole on Quinpool',
+          id: 'ctx1',
+          permalink: '/r/h/comments/ctx1/',
+          created_utc: now,
+        },
+        {
+          author: 'user2',
+          title: 'Bridge closure update',
+          id: 'ctx2',
+          permalink: '/r/h/comments/ctx2/',
+          created_utc: now,
+        },
       ]);
       return Promise.resolve({ ok: true, text: async () => xml });
     });
@@ -1440,7 +1549,7 @@ describe('scheduled()', () => {
     await worker.scheduled({}, e, {});
     const storedPrompt = await env.PREDICTIONS.get('latest_image_prompt');
     expect(storedPrompt).not.toBeNull();
-    expect(storedPrompt).toContain('Halifax Nova Scotia gas prices');
+    expect(storedPrompt).toContain('Nova Scotia Canada');
     expect(storedPrompt).toContain('going UP');
   });
 

@@ -13,7 +13,7 @@ During this time, `/u/buckit` continued posting normally. At least one price cha
 ### Why it wasn't caught sooner
 
 - **No uptime monitoring.** There is no alert when the `latest_prediction.updated_at` timestamp goes stale. The only signal was a human noticing the date hadn't changed.
-- **Silent failure mode.** The cron handler logs `no matching post found — done` both when Reddit has no matching post *and* when the fetch fails non-ok (it logs the error but returns without throwing). From the outside, the two look identical in behaviour.
+- **Silent failure mode.** The cron handler logs `no matching post found — done` both when Reddit has no matching post _and_ when the fetch fails non-ok (it logs the error but returns without throwing). From the outside, the two look identical in behaviour.
 - **No external canary.** The `/api/latest` endpoint returns whatever is in KV — including stale data — with a `200 OK`. There is nothing checking that the data is fresh.
 
 ### Root cause
@@ -24,18 +24,20 @@ Reddit deprecated unauthenticated access to their JSON API (`.json` endpoints) f
 
 Migrated all Reddit fetches from the JSON API to the Atom RSS feed:
 
-| Before | After |
-|--------|-------|
-| `GET /r/halifax/new.json?limit=100` | `GET /r/halifax/new.rss?limit=100` |
+| Before                                       | After                                       |
+| -------------------------------------------- | ------------------------------------------- |
+| `GET /r/halifax/new.json?limit=100`          | `GET /r/halifax/new.rss?limit=100`          |
 | `GET /r/novascotia/top.json?t=week&limit=10` | `GET /r/novascotia/top.rss?t=week&limit=10` |
 
 The RSS feed encodes post content differently from the JSON API:
+
 - Post body is HTML-entity-encoded inside `<content type="html">`
 - The user-authored markdown (rendered to HTML) is wrapped in `<!-- SC_OFF -->...<div class="md">...</div><!-- SC_ON -->` markers
 - Markdown tables are pre-rendered to HTML `<table>/<td>` elements
 - Metadata (author, post ID, timestamp) is in standard Atom elements
 
 New utilities added:
+
 - `decodeHtmlEntities()` — decodes the double-encoding present in RSS content
 - `parseRssEntries()` — converts Atom XML into the same post-object shape the rest of the code already expected
 - `parseRedditPost()` gained a new HTML table strategy for the RSS-rendered table format
