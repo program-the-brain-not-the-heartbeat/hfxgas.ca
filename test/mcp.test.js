@@ -208,3 +208,129 @@ describe('trigger_reddit_scan (secret required)', () => {
     expect(result.status).toBe(401);
   });
 });
+
+// ── BuckitMCP.fetch (HTTP handler) ────────────────────────────────────────
+
+function makeMcpFetch(kvData = {}) {
+  const store = { ...kvData };
+  const mockEnv = {
+    WEBHOOK_SECRET: 'test-secret',
+    SITE_URL: 'https://hfxgas.ca',
+    REDDIT_USER_AGENT: 'Buckit/1.0 (test)',
+    REDDIT_AUTHOR: 'buckit',
+    REDDIT_SUBREDDIT: 'halifax',
+    MAX_HISTORY: '10',
+    PREDICTIONS: {
+      get: async (key) => store[key] ?? null,
+      put: async (key, value) => {
+        store[key] = value;
+      },
+    },
+    IMAGES: { get: async () => null, put: async () => {} },
+    AI: { run: async () => ({ image: null }) },
+  };
+
+  // Bind all tool methods and fetch to a plain object so WorkerEntrypoint
+  // constructor is not required in tests.
+  const instance = {
+    env: mockEnv,
+    get_latest_prediction: BuckitMCP.prototype.get_latest_prediction.bind({ env: mockEnv }),
+    get_prediction_history: BuckitMCP.prototype.get_prediction_history.bind({ env: mockEnv }),
+    get_status: BuckitMCP.prototype.get_status.bind({ env: mockEnv }),
+    post_prediction: BuckitMCP.prototype.post_prediction.bind({ env: mockEnv }),
+    trigger_reddit_scan: BuckitMCP.prototype.trigger_reddit_scan.bind({ env: mockEnv }),
+  };
+  instance.fetch = BuckitMCP.prototype.fetch.bind(instance);
+  return instance;
+}
+
+function mcpRequest(name, args = {}) {
+  return new Request('https://hfxgas.ca/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method: 'tools/call', params: { name, arguments: args } }),
+  });
+}
+
+describe('BuckitMCP.fetch (HTTP handler)', () => {
+  it('returns 404 for GET requests', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(new Request('https://hfxgas.ca/mcp', { method: 'GET' }));
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 for invalid JSON body', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(
+      new Request('https://hfxgas.ca/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'not-json',
+      })
+    );
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe('Invalid JSON');
+  });
+
+  it('returns 404 for unknown MCP method', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(
+      new Request('https://hfxgas.ca/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method: 'unknown/method', params: {} }),
+      })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for unknown tool name', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(mcpRequest('nonexistent_tool'));
+    expect(res.status).toBe(404);
+    const data = await res.json();
+    expect(data.error).toMatch(/Unknown tool/);
+  });
+
+  it('calls get_latest_prediction and returns result', async () => {
+    const pred = { direction: 'up', predictedPrice: 1.72, fuelType: 'gas' };
+    const mcp = makeMcpFetch({ latest_prediction: JSON.stringify(pred) });
+    const res = await mcp.fetch(mcpRequest('get_latest_prediction'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.result.direction).toBe('up');
+  });
+
+  it('calls get_prediction_history and returns result', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(mcpRequest('get_prediction_history', { limit: 5 }));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(Array.isArray(data.result)).toBe(true);
+  });
+
+  it('calls get_status and returns result', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(mcpRequest('get_status'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.result.ok).toBe(true);
+  });
+
+  it('rejects trigger_reddit_scan without secret', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(mcpRequest('trigger_reddit_scan', { secret: '' }));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.result.error).toBe('Unauthorized');
+  });
+
+  it('rejects trigger_reddit_scan with wrong secret', async () => {
+    const mcp = makeMcpFetch();
+    const res = await mcp.fetch(mcpRequest('trigger_reddit_scan', { secret: 'wrong' }));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.result.error).toBe('Unauthorized');
+  });
+});

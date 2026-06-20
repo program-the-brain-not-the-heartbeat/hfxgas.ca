@@ -96,7 +96,26 @@ tasks:
 
   scan:
     desc: Trigger a Reddit scan via MCP (reads WEBHOOK_SECRET from .dev.vars or env)
-    cmd: 'node -e "fetch(''https://hfxgas.ca/mcp'',{method:''POST'',headers:{''Content-Type'':''application/json''},body:JSON.stringify({method:''tools/call'',params:{name:''trigger_reddit_scan'',arguments:{secret:process.env.WEBHOOK_SECRET}}})}).then(r=>r.json()).then(d=>console.log(JSON.stringify(d,null,2)))"'
+    cmd: |
+      node -e "
+        const fs = require('fs');
+        const secret = (() => {
+          if (process.env.WEBHOOK_SECRET) return process.env.WEBHOOK_SECRET;
+          try {
+            const vars = Object.fromEntries(
+              fs.readFileSync('.dev.vars', 'utf8').split('\n')
+                .filter(l => l && !l.startsWith('#') && l.includes('='))
+                .map(l => { const i = l.indexOf('='); return [l.slice(0,i).trim(), l.slice(i+1).trim()]; })
+            );
+            return vars.WEBHOOK_SECRET || '';
+          } catch { return ''; }
+        })();
+        fetch('https://hfxgas.ca/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method: 'tools/call', params: { name: 'trigger_reddit_scan', arguments: { secret } } })
+        }).then(r => r.json()).then(d => console.log(JSON.stringify(d, null, 2)));
+      "
 
   scan:force:
     desc: Clear dedup key and re-scan Reddit (regenerates image for latest post)
