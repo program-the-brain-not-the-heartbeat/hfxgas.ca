@@ -2,13 +2,13 @@
  * Buckit Worker — Full test suite (100% coverage)
  *
  * Uses @cloudflare/vitest-pool-workers:
- * - SELF.fetch() exercises the real Worker with real miniflare bindings
- * - env from cloudflare:test is used for direct KV inspection
+ * - workerExports.default.fetch() exercises the real Worker with real miniflare bindings
+ * - env from cloudflare:workers is used for direct KV inspection
  * - Utility functions tested via direct imports
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import {
   escapeHtml,
   decodeHtmlEntities,
@@ -1099,7 +1099,7 @@ describe('renderHtml', () => {
   });
 });
 
-// ── Routes via SELF.fetch ──────────────────────────────────────────────────────
+// ── Routes via workerExports.default.fetch ──────────────────────────────────────────────────────
 
 describe('GET /', () => {
   beforeEach(async () => {
@@ -1109,17 +1109,19 @@ describe('GET /', () => {
   });
 
   it('200 HTML', async () => {
-    const res = await SELF.fetch('https://hfxgas.ca/');
+    const res = await workerExports.default.fetch('https://hfxgas.ca/');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
   });
 
   it('cache-control: no-store', async () => {
-    expect((await SELF.fetch('https://hfxgas.ca/')).headers.get('cache-control')).toBe('no-store');
+    expect(
+      (await workerExports.default.fetch('https://hfxgas.ca/')).headers.get('cache-control')
+    ).toBe('no-store');
   });
 
   it('security headers present on GET /', async () => {
-    const res = await SELF.fetch('https://hfxgas.ca/');
+    const res = await workerExports.default.fetch('https://hfxgas.ca/');
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');
     expect(res.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
@@ -1128,7 +1130,9 @@ describe('GET /', () => {
   });
 
   it('empty state when KV empty', async () => {
-    expect(await (await SELF.fetch('https://hfxgas.ca/')).text()).toContain('No prediction yet.');
+    expect(await (await workerExports.default.fetch('https://hfxgas.ca/')).text()).toContain(
+      'No prediction yet.'
+    );
   });
 
   it('shows prediction with new data model', async () => {
@@ -1141,7 +1145,7 @@ describe('GET /', () => {
         updated_at: new Date().toISOString(),
       })
     );
-    const html = await (await SELF.fetch('https://hfxgas.ca/')).text();
+    const html = await (await workerExports.default.fetch('https://hfxgas.ca/')).text();
     expect(html).toContain('+3.6¢');
     expect(html).toContain('\u2191');
   });
@@ -1157,13 +1161,15 @@ describe('GET /', () => {
       })
     );
     await env.PREDICTIONS.put('latest_image_key', 'images/abc123.png');
-    const html = await (await SELF.fetch('https://hfxgas.ca/')).text();
+    const html = await (await workerExports.default.fetch('https://hfxgas.ca/')).text();
     expect(html).toContain('image-section');
     expect(html).toContain('abc123.png');
   });
 
   it('hides history when empty', async () => {
-    expect(await (await SELF.fetch('https://hfxgas.ca/')).text()).toContain('display:none');
+    expect(await (await workerExports.default.fetch('https://hfxgas.ca/')).text()).toContain(
+      'display:none'
+    );
   });
 });
 
@@ -1173,7 +1179,9 @@ describe('GET /api/latest', () => {
   });
 
   it('null when empty', async () => {
-    expect(await (await SELF.fetch('https://hfxgas.ca/api/latest')).json()).toBeNull();
+    expect(
+      await (await workerExports.default.fetch('https://hfxgas.ca/api/latest')).json()
+    ).toBeNull();
   });
 
   it('returns prediction JSON', async () => {
@@ -1185,14 +1193,14 @@ describe('GET /api/latest', () => {
         updated_at: new Date().toISOString(),
       })
     );
-    const data = await (await SELF.fetch('https://hfxgas.ca/api/latest')).json();
+    const data = await (await workerExports.default.fetch('https://hfxgas.ca/api/latest')).json();
     expect(data.gas.direction).toBe('down');
   });
 });
 
 describe('GET /robots.txt', () => {
   it('200 text/plain with allow all', async () => {
-    const text = await (await SELF.fetch('https://hfxgas.ca/robots.txt')).text();
+    const text = await (await workerExports.default.fetch('https://hfxgas.ca/robots.txt')).text();
     expect(text).toContain('User-agent: *');
     expect(text).toContain('Allow: /');
     expect(text).toContain('Sitemap:');
@@ -1201,7 +1209,7 @@ describe('GET /robots.txt', () => {
 
 describe('GET /sitemap.xml', () => {
   it('200 valid XML', async () => {
-    const text = await (await SELF.fetch('https://hfxgas.ca/sitemap.xml')).text();
+    const text = await (await workerExports.default.fetch('https://hfxgas.ca/sitemap.xml')).text();
     expect(text).toContain('<urlset');
     expect(text).toContain('hfxgas.ca');
   });
@@ -1209,7 +1217,7 @@ describe('GET /sitemap.xml', () => {
 
 describe('GET /llms.txt', () => {
   it('200 with attribution', async () => {
-    const text = await (await SELF.fetch('https://hfxgas.ca/llms.txt')).text();
+    const text = await (await workerExports.default.fetch('https://hfxgas.ca/llms.txt')).text();
     expect(text).toContain('u/buckit');
     expect(text).toContain('r/halifax');
     expect(text).toContain('program-the-brain-not-the-heartbeat');
@@ -1218,19 +1226,25 @@ describe('GET /llms.txt', () => {
 
 describe('GET /images/:key', () => {
   it('404 when not in R2', async () => {
-    expect((await SELF.fetch('https://hfxgas.ca/images/notfound.png')).status).toBe(404);
+    expect(
+      (await workerExports.default.fetch('https://hfxgas.ca/images/notfound.png')).status
+    ).toBe(404);
   });
 });
 
 describe('404 routing', () => {
   it('unknown path → 404', async () => {
-    expect((await SELF.fetch('https://hfxgas.ca/unknown')).status).toBe(404);
+    expect((await workerExports.default.fetch('https://hfxgas.ca/unknown')).status).toBe(404);
   });
   it('POST / → 404', async () => {
-    expect((await SELF.fetch('https://hfxgas.ca/', { method: 'POST' })).status).toBe(404);
+    expect(
+      (await workerExports.default.fetch('https://hfxgas.ca/', { method: 'POST' })).status
+    ).toBe(404);
   });
   it('DELETE /webhook → 404', async () => {
-    expect((await SELF.fetch('https://hfxgas.ca/webhook', { method: 'DELETE' })).status).toBe(404);
+    expect(
+      (await workerExports.default.fetch('https://hfxgas.ca/webhook', { method: 'DELETE' })).status
+    ).toBe(404);
   });
 });
 
@@ -1258,11 +1272,11 @@ describe('POST /webhook', () => {
   };
 
   it('200 new format: bearer token', async () => {
-    expect((await SELF.fetch(makeReq(newFormat, 'test-secret'))).status).toBe(200);
+    expect((await workerExports.default.fetch(makeReq(newFormat, 'test-secret'))).status).toBe(200);
   });
 
   it('400 ?secret= query param rejected (use Bearer header instead)', async () => {
-    const res = await SELF.fetch(
+    const res = await workerExports.default.fetch(
       new Request('https://hfxgas.ca/webhook?secret=test-secret', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1275,7 +1289,7 @@ describe('POST /webhook', () => {
   });
 
   it('writes gas+diesel to KV with new format', async () => {
-    await SELF.fetch(makeReq(newFormat, 'test-secret'));
+    await workerExports.default.fetch(makeReq(newFormat, 'test-secret'));
     const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
     expect(stored.gas.direction).toBe('up');
     expect(stored.diesel.direction).toBe('down');
@@ -1284,22 +1298,22 @@ describe('POST /webhook', () => {
 
   it('new format: no-change direction accepted', async () => {
     const payload = { gas: { direction: 'no-change', price: 1.275 } };
-    expect((await SELF.fetch(makeReq(payload, 'test-secret'))).status).toBe(200);
+    expect((await workerExports.default.fetch(makeReq(payload, 'test-secret'))).status).toBe(200);
   });
 
   it('new format: 400 invalid gas direction', async () => {
     const payload = { gas: { direction: 'sideways', price: 1.5 } };
-    expect((await SELF.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
+    expect((await workerExports.default.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
   });
 
   it('new format: 400 invalid diesel direction', async () => {
     const payload = { diesel: { direction: 'bad', price: 1.5 } };
-    expect((await SELF.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
+    expect((await workerExports.default.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
   });
 
   it('new format: 400 non-number gas price', async () => {
     const payload = { gas: { direction: 'up', price: 'lots' } };
-    expect((await SELF.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
+    expect((await workerExports.default.fetch(makeReq(payload, 'test-secret'))).status).toBe(400);
   });
 
   // ── Legacy format (direction, predicted_price, fuel_type) ──────────────────
@@ -1312,11 +1326,13 @@ describe('POST /webhook', () => {
   };
 
   it('200 legacy format: bearer token', async () => {
-    expect((await SELF.fetch(makeReq(legacyValid, 'test-secret'))).status).toBe(200);
+    expect((await workerExports.default.fetch(makeReq(legacyValid, 'test-secret'))).status).toBe(
+      200
+    );
   });
 
   it('legacy format: writes gas slot', async () => {
-    await SELF.fetch(makeReq(legacyValid, 'test-secret'));
+    await workerExports.default.fetch(makeReq(legacyValid, 'test-secret'));
     const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
     expect(stored.gas.direction).toBe('up');
     expect(stored.gas.price).toBeCloseTo(1.719);
@@ -1324,12 +1340,12 @@ describe('POST /webhook', () => {
 
   it('legacy format: no-change direction accepted', async () => {
     const payload = { ...legacyValid, direction: 'no-change' };
-    expect((await SELF.fetch(makeReq(payload, 'test-secret'))).status).toBe(200);
+    expect((await workerExports.default.fetch(makeReq(payload, 'test-secret'))).status).toBe(200);
   });
 
   it('legacy format: diesel fuel_type → diesel slot', async () => {
     const payload = { ...legacyValid, fuel_type: 'diesel' };
-    await SELF.fetch(makeReq(payload, 'test-secret'));
+    await workerExports.default.fetch(makeReq(payload, 'test-secret'));
     const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
     expect(stored.diesel.direction).toBe('up');
     expect(stored.gas).toBeNull();
@@ -1337,41 +1353,57 @@ describe('POST /webhook', () => {
 
   it('legacy format: fuel_type defaults to gas', async () => {
     const { fuel_type: _, ...noFuel } = legacyValid;
-    await SELF.fetch(makeReq(noFuel, 'test-secret'));
+    await workerExports.default.fetch(makeReq(noFuel, 'test-secret'));
     const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
     expect(stored.gas.direction).toBe('up');
   });
 
   it('legacy format: 400 invalid direction', async () => {
     expect(
-      (await SELF.fetch(makeReq({ ...legacyValid, direction: 'sideways' }, 'test-secret'))).status
+      (
+        await workerExports.default.fetch(
+          makeReq({ ...legacyValid, direction: 'sideways' }, 'test-secret')
+        )
+      ).status
     ).toBe(400);
   });
 
   it('legacy format: 400 invalid fuel_type', async () => {
     expect(
-      (await SELF.fetch(makeReq({ ...legacyValid, fuel_type: 'jet' }, 'test-secret'))).status
+      (
+        await workerExports.default.fetch(
+          makeReq({ ...legacyValid, fuel_type: 'jet' }, 'test-secret')
+        )
+      ).status
     ).toBe(400);
   });
 
   it('legacy format: 400 non-number predicted_price', async () => {
     expect(
-      (await SELF.fetch(makeReq({ ...legacyValid, predicted_price: 'lots' }, 'test-secret'))).status
+      (
+        await workerExports.default.fetch(
+          makeReq({ ...legacyValid, predicted_price: 'lots' }, 'test-secret')
+        )
+      ).status
     ).toBe(400);
   });
 
   it('legacy format: 400 non-number current_price', async () => {
     expect(
-      (await SELF.fetch(makeReq({ ...legacyValid, current_price: 'some' }, 'test-secret'))).status
+      (
+        await workerExports.default.fetch(
+          makeReq({ ...legacyValid, current_price: 'some' }, 'test-secret')
+        )
+      ).status
     ).toBe(400);
   });
 
   // ── Auth ───────────────────────────────────────────────────────────────────
   it('401 wrong secret', async () => {
-    expect((await SELF.fetch(makeReq(newFormat, 'wrong'))).status).toBe(401);
+    expect((await workerExports.default.fetch(makeReq(newFormat, 'wrong'))).status).toBe(401);
   });
   it('401 no secret', async () => {
-    const res = await SELF.fetch(
+    const res = await workerExports.default.fetch(
       new Request('https://hfxgas.ca/webhook', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -1381,7 +1413,7 @@ describe('POST /webhook', () => {
     expect(res.status).toBe(401);
   });
   it('400 invalid JSON', async () => {
-    const res = await SELF.fetch(
+    const res = await workerExports.default.fetch(
       new Request('https://hfxgas.ca/webhook', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer test-secret' },
@@ -1393,14 +1425,14 @@ describe('POST /webhook', () => {
 
   // ── Shared ─────────────────────────────────────────────────────────────────
   it('updated_at is ISO 8601', async () => {
-    await SELF.fetch(makeReq(newFormat, 'test-secret'));
+    await workerExports.default.fetch(makeReq(newFormat, 'test-secret'));
     const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
     expect(new Date(stored.updated_at).toISOString()).toBe(stored.updated_at);
   });
 
   it('notes absent → null', async () => {
     const { notes: _, ...noNotes } = newFormat;
-    await SELF.fetch(makeReq(noNotes, 'test-secret'));
+    await workerExports.default.fetch(makeReq(noNotes, 'test-secret'));
     expect(JSON.parse(await env.PREDICTIONS.get('latest_prediction')).notes).toBeNull();
   });
 });
@@ -1413,6 +1445,7 @@ describe('scheduled()', () => {
     await env.PREDICTIONS.delete('prediction_history');
     await env.PREDICTIONS.delete('last_processed_post_id');
     await env.PREDICTIONS.delete('latest_image_key');
+    await env.PREDICTIONS.delete('latest_image_prompt');
   });
 
   // Post with table format (matches real /u/buckit posts)
