@@ -8,17 +8,17 @@ Buckit monitors r/halifax for /u/buckit's weekly gas price prediction posts, gen
 
 ## Routes
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | / | No | Display website (HTML) |
-| GET | /api/latest | No | Latest prediction as JSON |
-| GET | /images/:key | No | AI-generated image from R2 |
-| GET | /robots.txt | No | SEO: allow all crawlers |
-| GET | /sitemap.xml | No | SEO: sitemap |
-| GET | /llms.txt | No | GEO: LLM-friendly plain text |
-| POST | /webhook | Yes | Manual prediction override |
-| GET | /mcp | No | MCP server endpoint |
-| * | * | — | 404 |
+| Method | Path         | Auth | Description                  |
+| ------ | ------------ | ---- | ---------------------------- |
+| GET    | /            | No   | Display website (HTML)       |
+| GET    | /api/latest  | No   | Latest prediction as JSON    |
+| GET    | /images/:key | No   | AI-generated image from R2   |
+| GET    | /robots.txt  | No   | SEO: allow all crawlers      |
+| GET    | /sitemap.xml | No   | SEO: sitemap                 |
+| GET    | /llms.txt    | No   | GEO: LLM-friendly plain text |
+| POST   | /webhook     | Yes  | Manual prediction override   |
+| GET    | /mcp         | No   | MCP server endpoint          |
+| \*     | \*           | —    | 404                          |
 
 ## Data Model
 
@@ -26,7 +26,7 @@ Predictions use a dual-fuel model. Both `gas` and `diesel` may be `null` if abse
 
 ```json
 {
-  "gas":    { "direction": "up|down|no-change|null", "adjustment": 3.6, "price": 1.621 },
+  "gas": { "direction": "up|down|no-change|null", "adjustment": 3.6, "price": 1.621 },
   "diesel": { "direction": "up|down|no-change|null", "adjustment": 0.7, "price": 1.544 },
   "notes": "optional string",
   "source": "reddit|webhook",
@@ -43,7 +43,7 @@ Predictions use a dual-fuel model. Both `gas` and `diesel` may be `null` if abse
 
 ```json
 {
-  "gas":    { "direction": "up|down|no-change", "adjustment": 3.6, "price": 1.621 },
+  "gas": { "direction": "up|down|no-change", "adjustment": 3.6, "price": 1.621 },
   "diesel": { "direction": "up|down|no-change", "adjustment": 0.7, "price": 1.544 },
   "notes": "optional string"
 }
@@ -76,22 +76,19 @@ Prices are in **cents** (162.1 → $1.621/L). `parseAdjustment()` handles `UP X.
 
 ## MCP Tools
 
-| Tool | Auth | Description |
-|------|------|-------------|
-| `get_latest_prediction` | None | Current prediction from KV |
-| `get_prediction_history` | None | Last N predictions (max 10) |
-| `get_status` | None | Health check: last run, image key, post ID |
-| `post_prediction` | WEBHOOK_SECRET | Submit manual override |
-| `trigger_reddit_scan` | WEBHOOK_SECRET | Trigger Reddit scan manually |
+| Tool                     | Auth           | Description                                |
+| ------------------------ | -------------- | ------------------------------------------ |
+| `get_latest_prediction`  | None           | Current prediction from KV                 |
+| `get_prediction_history` | None           | Last N predictions (max 10)                |
+| `get_status`             | None           | Health check: last run, image key, post ID |
+| `post_prediction`        | WEBHOOK_SECRET | Submit manual override                     |
+| `trigger_reddit_scan`    | WEBHOOK_SECRET | Trigger Reddit scan manually               |
 
-## Cron Schedule (Thursday — Halifax time)
+## Cron Schedule (hourly)
 
-- `0 12 * * 4` — 12:00 UTC (9:00 AM Halifax)
-- `0 14 * * 4` — 14:00 UTC (11:00 AM Halifax)
-- `0 16 * * 4` — 16:00 UTC (1:00 PM Halifax)
-- `0 18 * * 4` — 18:00 UTC (3:00 PM Halifax)
+- `0 * * * *` — runs every hour, 24/7
 
-**Interrupter clause:** The look-back window is 7 days (not 24 hours). Posts on any day of the week within the last 7 days are eligible. This handles NSUARB emergency mid-week rate adjustments.
+**Dedup:** `last_processed_post_id` in KV prevents reprocessing the same post. The look-back window is 7 days (not 24 hours) — posts on any day are eligible, handling both weekly Thursday predictions and NSUARB emergency mid-week interrupter clause adjustments.
 
 ## Storage
 
@@ -101,17 +98,17 @@ Prices are in **cents** (162.1 → $1.621/L). `parseAdjustment()` handles `UP X.
 
 ## Key Exports (src/index.js)
 
-| Export | Description |
-|--------|-------------|
-| `escapeHtml(str)` | XSS-safe HTML escaping |
-| `formatDate(iso)` | ISO → Halifax local time string |
-| `formatRelativeTime(iso)` | ISO → "3 days ago" |
-| `getSeason(date)` | UTC date → winter/spring/summer/fall |
-| `buildImagePrompt(direction, postId, date)` | Weather-aware AI prompt |
-| `parseAdjustment(adj)` | "UP 3.6" → `{direction, adjustment}` |
-| `parseRedditPost(post)` | Reddit post → `{gas, diesel, notes}` |
-| `buildChartData(history)` | History array → Chart.js dataset |
-| `renderHtml({prediction, history, imageKey, siteUrl})` | Full HTML string |
+| Export                                                 | Description                          |
+| ------------------------------------------------------ | ------------------------------------ |
+| `escapeHtml(str)`                                      | XSS-safe HTML escaping               |
+| `formatDate(iso)`                                      | ISO → Halifax local time string      |
+| `formatRelativeTime(iso)`                              | ISO → "3 days ago"                   |
+| `getSeason(date)`                                      | UTC date → winter/spring/summer/fall |
+| `buildImagePrompt(direction, postId, date)`            | Weather-aware AI prompt              |
+| `parseAdjustment(adj)`                                 | "UP 3.6" → `{direction, adjustment}` |
+| `parseRedditPost(post)`                                | Reddit post → `{gas, diesel, notes}` |
+| `buildChartData(history)`                              | History array → Chart.js dataset     |
+| `renderHtml({prediction, history, imageKey, siteUrl})` | Full HTML string                     |
 
 ## Contribution Rules
 

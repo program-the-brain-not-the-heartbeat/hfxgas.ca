@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
 import {
   escapeHtml,
+  decodeHtmlEntities,
   formatDate,
   formatRelativeTime,
   getSeason,
@@ -19,10 +20,41 @@ import {
   withSecurityHeaders,
   parseAdjustment,
   parseRedditPost,
+  parseRssEntries,
   buildChartData,
   renderHtml,
 } from '../src/index.js';
 import worker from '../src/index.js';
+
+// ── RSS test helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal Atom RSS feed XML string from an array of post objects.
+ * The selftext of each post is wrapped in <!-- SC_OFF -->...<div class="md">...</div><!-- SC_ON -->
+ * and then HTML-entity-encoded, matching what Reddit's RSS feed produces.
+ */
+function makeRssXml(posts = []) {
+  const entries = posts
+    .map((p) => {
+      const author = p.author ?? 'unknown';
+      const title = (p.title ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const id = p.id ?? 'unknown';
+      const permalink = p.permalink ?? '/r/halifax/comments/unknown/';
+      const published = p.created_utc
+        ? new Date(p.created_utc * 1000).toISOString()
+        : new Date().toISOString();
+      const selftext = p.selftext ?? '';
+      const htmlBody = `<!-- SC_OFF --><div class="md">${selftext}</div><!-- SC_ON -->`;
+      const encoded = htmlBody
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+      return `<entry><author><name>/u/${author}</name></author><title>${title}</title><id>t3_${id}</id><link href="https://www.reddit.com${permalink}"/><published>${published}</published><content type="html">${encoded}</content></entry>`;
+    })
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">${entries}</feed>`;
+}
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +69,92 @@ describe('escapeHtml', () => {
     expect(escapeHtml(null)).toBe('');
     expect(escapeHtml(undefined)).toBe('');
     expect(escapeHtml(42)).toBe('');
+  });
+});
+
+describe('decodeHtmlEntities', () => {
+  it('decodes &amp; &lt; &gt; &quot; &#39;', () => {
+    expect(decodeHtmlEntities('&amp;&lt;&gt;&quot;&#39;')).toBe('&<>"\'');
+  });
+  it('decodes numeric entities', () => {
+    expect(decodeHtmlEntities('&#65;')).toBe('A');
+    expect(decodeHtmlEntities('&#32;')).toBe(' ');
+  });
+  it('passes plain strings unchanged', () => {
+    expect(decodeHtmlEntities('hello world')).toBe('hello world');
+  });
+  it('returns empty string for non-string', () => {
+    expect(decodeHtmlEntities(null)).toBe('');
+  });
+});
+
+describe('parseRssEntries', () => {
+  const basePublished = '2026-06-18T17:32:59+00:00';
+  const baseUtc = Math.floor(new Date(basePublished).getTime() / 1000);
+
+  function singleEntryXml({ author = 'buckit', title = 'Weekly Gas Post', id = 'abc123', selftext = '' } = {}) {
+    return makeRssXml([{
+      author, title, id,
+      permalink: `/r/halifax/comments/${id}/gas_post/`,
+      created_utc: baseUtc,
+      selftext,
+    }]);
+  }
+
+  it('parses author (strips /u/ prefix)', () => {
+    const entries = parseRssEntries(singleEntryXml({ author: 'Buckit' }));
+    expect(entries[0].author).toBe('Buckit');
+  });
+
+  it('parses title', () => {
+    const entries = parseRssEntries(singleEntryXml({ title: 'Weekly Gas Post ⛽' }));
+    expect(entries[0].title).toBe('Weekly Gas Post ⛽');
+  });
+
+  it('strips t3_ prefix from id', () => {
+    const entries = parseRssEntries(singleEntryXml({ id: 'xyz789' }));
+    expect(entries[0].id).toBe('xyz789');
+  });
+
+  it('parses permalink', () => {
+    const entries = parseRssEntries(singleEntryXml({ id: 'abc123' }));
+    expect(entries[0].permalink).toBe('/r/halifax/comments/abc123/gas_post/');
+  });
+
+  it('parses created_utc from published timestamp', () => {
+    const entries = parseRssEntries(singleEntryXml());
+    expect(entries[0].created_utc).toBe(baseUtc);
+  });
+
+  it('extracts selftext from SC_OFF/SC_ON block', () => {
+    const entries = parseRssEntries(singleEntryXml({ selftext: 'Hello world' }));
+    expect(entries[0].selftext).toContain('Hello world');
+  });
+
+  it('returns empty array for feed with no entries', () => {
+    const xml = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+    expect(parseRssEntries(xml)).toEqual([]);
+  });
+
+  it('returns multiple entries', () => {
+    const xml = makeRssXml([
+      { author: 'user1', title: 'Post A', id: 'aaa', permalink: '/r/h/comments/aaa/', created_utc: baseUtc, selftext: '' },
+      { author: 'user2', title: 'Post B', id: 'bbb', permalink: '/r/h/comments/bbb/', created_utc: baseUtc, selftext: '' },
+    ]);
+    const entries = parseRssEntries(xml);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].title).toBe('Post A');
+    expect(entries[1].title).toBe('Post B');
+  });
+
+  it('decodes HTML entities in title', () => {
+    const xml = makeRssXml([{
+      author: 'user', title: 'AT&T news', id: 'x1',
+      permalink: '/r/h/comments/x1/', created_utc: baseUtc, selftext: '',
+    }]);
+    // makeRssXml encodes the & in the title; parseRssEntries should decode it back
+    const entries = parseRssEntries(xml);
+    expect(entries[0].title).toBe('AT&T news');
   });
 });
 
@@ -59,19 +177,25 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(new Date().toISOString())).toBe('just now');
   });
   it('returns minutes ago', () => {
-    expect(formatRelativeTime(new Date(Date.now() - 5 * 60000).toISOString())).toBe('5 minutes ago');
+    expect(formatRelativeTime(new Date(Date.now() - 5 * 60000).toISOString())).toBe(
+      '5 minutes ago'
+    );
   });
   it('returns singular minute', () => {
     expect(formatRelativeTime(new Date(Date.now() - 60000).toISOString())).toBe('1 minute ago');
   });
   it('returns hours ago', () => {
-    expect(formatRelativeTime(new Date(Date.now() - 2 * 3600000).toISOString())).toBe('2 hours ago');
+    expect(formatRelativeTime(new Date(Date.now() - 2 * 3600000).toISOString())).toBe(
+      '2 hours ago'
+    );
   });
   it('returns singular hour', () => {
     expect(formatRelativeTime(new Date(Date.now() - 3600000).toISOString())).toBe('1 hour ago');
   });
   it('returns days ago', () => {
-    expect(formatRelativeTime(new Date(Date.now() - 3 * 86400000).toISOString())).toBe('3 days ago');
+    expect(formatRelativeTime(new Date(Date.now() - 3 * 86400000).toISOString())).toBe(
+      '3 days ago'
+    );
   });
   it('returns empty string for null', () => {
     expect(formatRelativeTime(null)).toBe('');
@@ -82,9 +206,12 @@ describe('formatRelativeTime', () => {
 });
 
 describe('getSeason', () => {
-  it('winter for December', () => expect(getSeason(new Date('2024-12-15T12:00:00Z'))).toBe('winter'));
-  it('winter for January', () => expect(getSeason(new Date('2024-01-10T12:00:00Z'))).toBe('winter'));
-  it('winter for February', () => expect(getSeason(new Date('2024-02-20T12:00:00Z'))).toBe('winter'));
+  it('winter for December', () =>
+    expect(getSeason(new Date('2024-12-15T12:00:00Z'))).toBe('winter'));
+  it('winter for January', () =>
+    expect(getSeason(new Date('2024-01-10T12:00:00Z'))).toBe('winter'));
+  it('winter for February', () =>
+    expect(getSeason(new Date('2024-02-20T12:00:00Z'))).toBe('winter'));
   it('spring for March', () => expect(getSeason(new Date('2024-03-21T12:00:00Z'))).toBe('spring'));
   it('spring for May', () => expect(getSeason(new Date('2024-05-01T12:00:00Z'))).toBe('spring'));
   it('summer for June', () => expect(getSeason(new Date('2024-06-21T12:00:00Z'))).toBe('summer'));
@@ -123,15 +250,40 @@ describe('buildImagePrompt', () => {
     expect(prompt).not.toContain('Topic 24');
   });
   // Season fallback path (empty context)
-  it('includes UP label (season fallback)', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain('going UP'));
-  it('includes DOWN label (season fallback)', () => expect(buildImagePrompt('down', 'abc', [], new Date('2024-07-15T12:00:00Z'))).toContain('going DOWN'));
-  it('winter context in January', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain('winter'));
-  it('summer context in July', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-07-15T12:00:00Z'))).toContain('summer'));
-  it('spring context in April', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-04-15T12:00:00Z'))).toContain('spring'));
-  it('fall context in October', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-10-15T12:00:00Z'))).toContain('fall'));
-  it('seed from postId', () => expect(buildImagePrompt('up', 'abc123xyz', [], new Date('2024-01-15T12:00:00Z'))).toContain('abc123xy'));
-  it('suffering mood for up', () => expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain('suffering'));
-  it('celebration mood for down', () => expect(buildImagePrompt('down', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain('celebration'));
+  it('includes UP label (season fallback)', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain(
+      'going UP'
+    ));
+  it('includes DOWN label (season fallback)', () =>
+    expect(buildImagePrompt('down', 'abc', [], new Date('2024-07-15T12:00:00Z'))).toContain(
+      'going DOWN'
+    ));
+  it('winter context in January', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain(
+      'winter'
+    ));
+  it('summer context in July', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-07-15T12:00:00Z'))).toContain(
+      'summer'
+    ));
+  it('spring context in April', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-04-15T12:00:00Z'))).toContain(
+      'spring'
+    ));
+  it('fall context in October', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-10-15T12:00:00Z'))).toContain('fall'));
+  it('seed from postId', () =>
+    expect(buildImagePrompt('up', 'abc123xyz', [], new Date('2024-01-15T12:00:00Z'))).toContain(
+      'abc123xy'
+    ));
+  it('suffering mood for up', () =>
+    expect(buildImagePrompt('up', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain(
+      'suffering'
+    ));
+  it('celebration mood for down', () =>
+    expect(buildImagePrompt('down', 'abc', [], new Date('2024-01-15T12:00:00Z'))).toContain(
+      'celebration'
+    ));
   // Default param fallback
   it('defaults to empty communityContext (season fallback) when not provided', () => {
     // No communityContext arg — should fall through to season fallback, not throw
@@ -145,18 +297,16 @@ describe('buildImagePrompt', () => {
 
 describe('fetchCommunityContext', () => {
   const mockEnv = { REDDIT_USER_AGENT: 'test-agent/1.0' };
+  const now = Math.floor(Date.now() / 1000);
 
   it('returns combined titles from both subreddits', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        data: {
-          children: [
-            { data: { title: 'Pothole on Quinpool' } },
-            { data: { title: 'Bridge closure update' } },
-          ],
-        },
-      }),
+      text: async () =>
+        makeRssXml([
+          { author: 'user1', title: 'Pothole on Quinpool', id: 'p1', permalink: '/r/h/comments/p1/', created_utc: now },
+          { author: 'user2', title: 'Bridge closure update', id: 'p2', permalink: '/r/h/comments/p2/', created_utc: now },
+        ]),
     });
     const titles = await fetchCommunityContext(mockEnv);
     // Both subreddits return 2 titles each = 4 total
@@ -180,9 +330,10 @@ describe('fetchCommunityContext', () => {
       }
       return Promise.resolve({
         ok: true,
-        json: async () => ({
-          data: { children: [{ data: { title: 'Nova Scotia ferry news' } }] },
-        }),
+        text: async () =>
+          makeRssXml([
+            { author: 'user1', title: 'Nova Scotia ferry news', id: 'q1', permalink: '/r/ns/comments/q1/', created_utc: now },
+          ]),
       });
     });
     const titles = await fetchCommunityContext(mockEnv);
@@ -193,15 +344,12 @@ describe('fetchCommunityContext', () => {
   it('filters out empty/falsy titles', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        data: {
-          children: [
-            { data: { title: 'Valid post' } },
-            { data: { title: '' } },
-            { data: { title: 'Another valid post' } },
-          ],
-        },
-      }),
+      text: async () =>
+        makeRssXml([
+          { author: 'user1', title: 'Valid post', id: 'r1', permalink: '/r/h/comments/r1/', created_utc: now },
+          { author: 'user2', title: '', id: 'r2', permalink: '/r/h/comments/r2/', created_utc: now },
+          { author: 'user3', title: 'Another valid post', id: 'r3', permalink: '/r/h/comments/r3/', created_utc: now },
+        ]),
     });
     const titles = await fetchCommunityContext(mockEnv);
     expect(titles).not.toContain('');
@@ -211,11 +359,11 @@ describe('fetchCommunityContext', () => {
   it('sends correct User-Agent header', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { children: [] } }),
+      text: async () => makeRssXml([]),
     });
     await fetchCommunityContext(mockEnv);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('top.json?t=week&limit=10'),
+      expect.stringContaining('top.rss?t=week&limit=10'),
       expect.objectContaining({ headers: { 'User-Agent': 'test-agent/1.0' } })
     );
   });
@@ -223,12 +371,30 @@ describe('fetchCommunityContext', () => {
   it('fetches from both r/halifax and r/novascotia', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { children: [] } }),
+      text: async () => makeRssXml([]),
     });
     await fetchCommunityContext(mockEnv);
     const urls = global.fetch.mock.calls.map(([url]) => url);
-    expect(urls.some((u) => u.includes('r/halifax/top.json'))).toBe(true);
-    expect(urls.some((u) => u.includes('r/novascotia/top.json'))).toBe(true);
+    expect(urls.some((u) => u.includes('r/halifax/top.rss'))).toBe(true);
+    expect(urls.some((u) => u.includes('r/novascotia/top.rss'))).toBe(true);
+  });
+
+  it('excludes posts authored by buckit (case-insensitive)', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () =>
+        makeRssXml([
+          { author: 'someuser', title: 'Pothole on Quinpool', id: 's1', permalink: '/r/h/comments/s1/', created_utc: now },
+          { author: 'buckit', title: 'Gas prices going up — fill up tonight', id: 's2', permalink: '/r/h/comments/s2/', created_utc: now },
+          { author: 'Buckit', title: 'Bridge closure update', id: 's3', permalink: '/r/h/comments/s3/', created_utc: now },
+          { author: 'anotheruser', title: 'Storm watch this weekend', id: 's4', permalink: '/r/h/comments/s4/', created_utc: now },
+        ]),
+    });
+    const titles = await fetchCommunityContext(mockEnv);
+    expect(titles).not.toContain('Gas prices going up — fill up tonight');
+    expect(titles).not.toContain('Bridge closure update');
+    expect(titles).toContain('Pothole on Quinpool');
+    expect(titles).toContain('Storm watch this weekend');
   });
 });
 
@@ -326,7 +492,8 @@ describe('parseRedditPost', () => {
   it('parses markdown table: gas up, diesel down', () => {
     const post = {
       title: 'Gas prices this week',
-      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\n|Diesel| DOWN 0.7 |154.4|\nMay be +/- 0.1',
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\n|Diesel| DOWN 0.7 |154.4|\nMay be +/- 0.1',
     };
     const r = parseRedditPost(post);
     expect(r.gas.direction).toBe('up');
@@ -340,7 +507,8 @@ describe('parseRedditPost', () => {
   it('parses markdown table: no change for gas', () => {
     const post = {
       title: 'Gas prices this week',
-      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |127.5|\n|Diesel| DOWN 0.7 |154.4|',
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |127.5|\n|Diesel| DOWN 0.7 |154.4|',
     };
     const r = parseRedditPost(post);
     expect(r.gas.direction).toBe('no-change');
@@ -376,11 +544,49 @@ describe('parseRedditPost', () => {
   it('notes strips table lines, keeps free text', () => {
     const post = {
       title: 'Prices',
-      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\nMay be +/- 0.1',
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\nMay be +/- 0.1',
     };
     const r = parseRedditPost(post);
     expect(r.notes).toContain('May be');
     expect(r.notes).not.toContain('|Regular|');
+  });
+
+  // ── HTML table format (from RSS feed) ──────────────────────────────────────
+  it('HTML table: parses gas up and diesel down', () => {
+    const selftext = '<div class="md"><table><thead><tr><th>Type</th><th>Adjustment</th><th>New Min Price</th></tr></thead><tbody><tr><td align="left">Regular</td><td align="left">DOWN 4.5</td><td align="left">165.2</td></tr><tr><td align="left">Diesel</td><td align="left">DOWN 1.1</td><td align="left">185.4</td></tr></tbody></table><p>May be up/down .01</p></div>';
+    const r = parseRedditPost({ title: 'Weekly Gas Post', selftext });
+    expect(r.gas.direction).toBe('down');
+    expect(r.gas.adjustment).toBeCloseTo(4.5);
+    expect(r.gas.price).toBeCloseTo(1.652);
+    expect(r.diesel.direction).toBe('down');
+    expect(r.diesel.adjustment).toBeCloseTo(1.1);
+    expect(r.diesel.price).toBeCloseTo(1.854);
+  });
+
+  it('HTML table: converts cent prices to dollars', () => {
+    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
+    const r = parseRedditPost({ title: 'Gas', selftext });
+    expect(r.gas.price).toBeCloseTo(1.621);
+  });
+
+  it('HTML table: no-change direction', () => {
+    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>NO CHANGE</td><td>162.1</td></tr></tbody></table></div>';
+    const r = parseRedditPost({ title: 'Gas', selftext });
+    expect(r.gas.direction).toBe('no-change');
+    expect(r.gas.adjustment).toBe(0);
+  });
+
+  it('HTML table: extracts notes from <p> tag', () => {
+    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table><p>May be up/down .01</p></div>';
+    const r = parseRedditPost({ title: 'Gas', selftext });
+    expect(r.notes).toBe('May be up/down .01');
+  });
+
+  it('HTML table: notes null when no <p> tag', () => {
+    const selftext = '<div class="md"><table><tbody><tr><td>Regular</td><td>UP 3.6</td><td>162.1</td></tr></tbody></table></div>';
+    const r = parseRedditPost({ title: 'Gas', selftext });
+    expect(r.notes).toBeNull();
   });
 
   // ── Free-text fallback ──────────────────────────────────────────────────────
@@ -395,11 +601,15 @@ describe('parseRedditPost', () => {
   });
 
   it('free-text: detects increase keyword', () => {
-    expect(parseRedditPost({ title: 'Prices will increase', selftext: '' }).gas.direction).toBe('up');
+    expect(parseRedditPost({ title: 'Prices will increase', selftext: '' }).gas.direction).toBe(
+      'up'
+    );
   });
 
   it('free-text: detects decrease keyword', () => {
-    expect(parseRedditPost({ title: 'Prices will decrease', selftext: '' }).gas.direction).toBe('down');
+    expect(parseRedditPost({ title: 'Prices will decrease', selftext: '' }).gas.direction).toBe(
+      'down'
+    );
   });
 
   it('free-text: extracts predicted price (second dollar amount)', () => {
@@ -461,12 +671,12 @@ describe('buildChartData', () => {
 
   it('reverses history (oldest first)', () => {
     const history = [
-      { gas: { price: 1.70 }, diesel: null, updated_at: '2024-11-14T17:00:00.000Z' },
+      { gas: { price: 1.7 }, diesel: null, updated_at: '2024-11-14T17:00:00.000Z' },
       { gas: { price: 1.65 }, diesel: null, updated_at: '2024-11-07T17:00:00.000Z' },
     ];
     const r = buildChartData(history);
     expect(r.gasData[0]).toBeCloseTo(1.65);
-    expect(r.gasData[1]).toBeCloseTo(1.70);
+    expect(r.gasData[1]).toBeCloseTo(1.7);
   });
 
   it('null for missing slots', () => {
@@ -479,7 +689,9 @@ describe('buildChartData', () => {
   });
 
   it('formats label from updated_at', () => {
-    const history = [{ gas: { price: 1.65 }, diesel: null, updated_at: '2024-11-07T17:00:00.000Z' }];
+    const history = [
+      { gas: { price: 1.65 }, diesel: null, updated_at: '2024-11-07T17:00:00.000Z' },
+    ];
     const r = buildChartData(history);
     expect(r.labels[0]).toMatch(/Nov/);
   });
@@ -506,6 +718,7 @@ describe('renderHtml', () => {
     prediction: basePrediction,
     history: [],
     imageKey: null,
+    imagePrompt: null,
     siteUrl: 'https://hfxgas.ca',
     ...overrides,
   });
@@ -532,16 +745,26 @@ describe('renderHtml', () => {
   });
 
   it('renders down arrow for gas going down', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, gas: { direction: 'down', adjustment: 2.1, price: 1.599 } },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: {
+          ...basePrediction,
+          gas: { direction: 'down', adjustment: 2.1, price: 1.599 },
+        },
+      })
+    );
     expect(html).toContain('\u2193');
   });
 
   it('renders = for no-change', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, gas: { direction: 'no-change', adjustment: 0, price: 1.275 } },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: {
+          ...basePrediction,
+          gas: { direction: 'no-change', adjustment: 0, price: 1.275 },
+        },
+      })
+    );
     expect(html).toContain('No Change');
   });
 
@@ -550,16 +773,26 @@ describe('renderHtml', () => {
   });
 
   it('aria-label for price going down', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, gas: { direction: 'down', adjustment: 2.1, price: 1.599 } },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: {
+          ...basePrediction,
+          gas: { direction: 'down', adjustment: 2.1, price: 1.599 },
+        },
+      })
+    );
     expect(html).toContain('aria-label="Price going down"');
   });
 
   it('aria-label for no change', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, gas: { direction: 'no-change', adjustment: 0, price: 1.275 } },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: {
+          ...basePrediction,
+          gas: { direction: 'no-change', adjustment: 0, price: 1.275 },
+        },
+      })
+    );
     expect(html).toContain('aria-label="No change"');
   });
 
@@ -578,17 +811,21 @@ describe('renderHtml', () => {
   });
 
   it('renders notes XSS-escaped', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, notes: '<script>alert(1)</script>' },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: { ...basePrediction, notes: '<script>alert(1)</script>' },
+      })
+    );
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
   });
 
   it('no notes block when notes null', () => {
-    const html = renderHtml(opts({
-      prediction: { ...basePrediction, notes: null },
-    }));
+    const html = renderHtml(
+      opts({
+        prediction: { ...basePrediction, notes: null },
+      })
+    );
     expect(html).not.toContain('class="notes"');
   });
 
@@ -596,6 +833,81 @@ describe('renderHtml', () => {
     const html = renderHtml(opts({ imageKey: 'images/abc123.png' }));
     expect(html).toContain('image-section');
     expect(html).toContain('abc123.png');
+  });
+
+  it('shows AI-generated badge and model name when imageKey set', () => {
+    const html = renderHtml(opts({ imageKey: 'images/abc123.png' }));
+    expect(html).toContain('ai-badge');
+    expect(html).toContain('AI-generated');
+    expect(html).toContain('flux-1-schnell');
+    expect(html).toContain('Cloudflare Workers AI');
+  });
+
+  it('shows prompt in details element when imagePrompt provided', () => {
+    const html = renderHtml(
+      opts({ imageKey: 'images/abc123.png', imagePrompt: 'Halifax gas prices going UP' })
+    );
+    expect(html).toContain('prompt-details');
+    expect(html).toContain('View AI prompt');
+    expect(html).toContain('Halifax gas prices going UP');
+  });
+
+  it('shows Reddit post link in caption when post_url present (no imagePrompt needed)', () => {
+    const html = renderHtml(
+      opts({
+        imageKey: 'images/abc123.png',
+        prediction: {
+          ...basePrediction,
+          post_url: 'https://www.reddit.com/r/halifax/comments/abc123/',
+        },
+      })
+    );
+    expect(html).toContain('View Reddit post');
+    expect(html).toContain('https://www.reddit.com/r/halifax/comments/abc123/');
+  });
+
+  it('shows Reddit post link in caption alongside prompt details', () => {
+    const html = renderHtml(
+      opts({
+        imageKey: 'images/abc123.png',
+        imagePrompt: 'Halifax gas prices going UP',
+        prediction: {
+          ...basePrediction,
+          post_url: 'https://www.reddit.com/r/halifax/comments/abc123/',
+        },
+      })
+    );
+    expect(html).toContain('View Reddit post');
+    expect(html).toContain('View AI prompt');
+  });
+
+  it('no Reddit post link when post_url absent', () => {
+    const html = renderHtml(opts({ imageKey: 'images/abc123.png' }));
+    expect(html).not.toContain('View Reddit post');
+  });
+
+  it('XSS-escapes post_url', () => {
+    const html = renderHtml(
+      opts({
+        imageKey: 'images/abc123.png',
+        prediction: { ...basePrediction, post_url: '"onmouseover="evil()' },
+      })
+    );
+    expect(html).not.toContain('"onmouseover=');
+    expect(html).toContain('&quot;onmouseover=');
+  });
+
+  it('XSS-escapes imagePrompt', () => {
+    const html = renderHtml(
+      opts({ imageKey: 'images/abc123.png', imagePrompt: '<script>evil()</script>' })
+    );
+    expect(html).not.toContain('<script>evil()');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('no prompt-details when imagePrompt is null', () => {
+    const html = renderHtml(opts({ imageKey: 'images/abc123.png', imagePrompt: null }));
+    expect(html).not.toContain('<details class="prompt-details">');
   });
 
   it('no image-section when imageKey null', () => {
@@ -639,7 +951,9 @@ describe('renderHtml', () => {
 
   it('animations inside prefers-reduced-motion media query', () => {
     const html = renderHtml(opts());
-    expect(html.match(/@media \(prefers-reduced-motion: no-preference\)\s*\{[\s\S]*?@keyframes/)).not.toBeNull();
+    expect(
+      html.match(/@media \(prefers-reduced-motion: no-preference\)\s*\{[\s\S]*?@keyframes/)
+    ).not.toBeNull();
   });
 
   it('fuel-cards side-by-side grid', () => {
@@ -647,11 +961,13 @@ describe('renderHtml', () => {
   });
 
   it('hc-fuels in history for dual fuel', () => {
-    const history = [{
-      gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
-      diesel: { direction: 'down', adjustment: 0.7, price: 1.544 },
-      updated_at: new Date().toISOString(),
-    }];
+    const history = [
+      {
+        gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
+        diesel: { direction: 'down', adjustment: 0.7, price: 1.544 },
+        updated_at: new Date().toISOString(),
+      },
+    ];
     const html = renderHtml(opts({ history }));
     expect(html).toContain('hc-fuel--diesel');
   });
@@ -719,24 +1035,30 @@ describe('GET /', () => {
   });
 
   it('shows prediction with new data model', async () => {
-    await env.PREDICTIONS.put('latest_prediction', JSON.stringify({
-      gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
-      diesel: { direction: 'down', adjustment: 0.7, price: 1.544 },
-      notes: null,
-      updated_at: new Date().toISOString(),
-    }));
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({
+        gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
+        diesel: { direction: 'down', adjustment: 0.7, price: 1.544 },
+        notes: null,
+        updated_at: new Date().toISOString(),
+      })
+    );
     const html = await (await SELF.fetch('https://hfxgas.ca/')).text();
     expect(html).toContain('+3.6¢');
     expect(html).toContain('\u2191');
   });
 
   it('shows image section when key set', async () => {
-    await env.PREDICTIONS.put('latest_prediction', JSON.stringify({
-      gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
-      diesel: null,
-      notes: null,
-      updated_at: new Date().toISOString(),
-    }));
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({
+        gas: { direction: 'up', adjustment: 3.6, price: 1.621 },
+        diesel: null,
+        notes: null,
+        updated_at: new Date().toISOString(),
+      })
+    );
     await env.PREDICTIONS.put('latest_image_key', 'images/abc123.png');
     const html = await (await SELF.fetch('https://hfxgas.ca/')).text();
     expect(html).toContain('image-section');
@@ -749,18 +1071,23 @@ describe('GET /', () => {
 });
 
 describe('GET /api/latest', () => {
-  beforeEach(async () => { await env.PREDICTIONS.delete('latest_prediction'); });
+  beforeEach(async () => {
+    await env.PREDICTIONS.delete('latest_prediction');
+  });
 
   it('null when empty', async () => {
     expect(await (await SELF.fetch('https://hfxgas.ca/api/latest')).json()).toBeNull();
   });
 
   it('returns prediction JSON', async () => {
-    await env.PREDICTIONS.put('latest_prediction', JSON.stringify({
-      gas: { direction: 'down', adjustment: 1.1, price: 1.55 },
-      diesel: null,
-      updated_at: new Date().toISOString(),
-    }));
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({
+        gas: { direction: 'down', adjustment: 1.1, price: 1.55 },
+        diesel: null,
+        updated_at: new Date().toISOString(),
+      })
+    );
     const data = await (await SELF.fetch('https://hfxgas.ca/api/latest')).json();
     expect(data.gas.direction).toBe('down');
   });
@@ -799,9 +1126,15 @@ describe('GET /images/:key', () => {
 });
 
 describe('404 routing', () => {
-  it('unknown path → 404', async () => { expect((await SELF.fetch('https://hfxgas.ca/unknown')).status).toBe(404); });
-  it('POST / → 404', async () => { expect((await SELF.fetch('https://hfxgas.ca/', { method: 'POST' })).status).toBe(404); });
-  it('DELETE /webhook → 404', async () => { expect((await SELF.fetch('https://hfxgas.ca/webhook', { method: 'DELETE' })).status).toBe(404); });
+  it('unknown path → 404', async () => {
+    expect((await SELF.fetch('https://hfxgas.ca/unknown')).status).toBe(404);
+  });
+  it('POST / → 404', async () => {
+    expect((await SELF.fetch('https://hfxgas.ca/', { method: 'POST' })).status).toBe(404);
+  });
+  it('DELETE /webhook → 404', async () => {
+    expect((await SELF.fetch('https://hfxgas.ca/webhook', { method: 'DELETE' })).status).toBe(404);
+  });
 });
 
 // ── POST /webhook ──────────────────────────────────────────────────────────────
@@ -832,11 +1165,13 @@ describe('POST /webhook', () => {
   });
 
   it('400 ?secret= query param rejected (use Bearer header instead)', async () => {
-    const res = await SELF.fetch(new Request('https://hfxgas.ca/webhook?secret=test-secret', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(newFormat),
-    }));
+    const res = await SELF.fetch(
+      new Request('https://hfxgas.ca/webhook?secret=test-secret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(newFormat),
+      })
+    );
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain('Authorization');
@@ -871,7 +1206,13 @@ describe('POST /webhook', () => {
   });
 
   // ── Legacy format (direction, predicted_price, fuel_type) ──────────────────
-  const legacyValid = { direction: 'up', current_price: 1.659, predicted_price: 1.719, fuel_type: 'gas', notes: 'Fill up.' };
+  const legacyValid = {
+    direction: 'up',
+    current_price: 1.659,
+    predicted_price: 1.719,
+    fuel_type: 'gas',
+    notes: 'Fill up.',
+  };
 
   it('200 legacy format: bearer token', async () => {
     expect((await SELF.fetch(makeReq(legacyValid, 'test-secret'))).status).toBe(200);
@@ -905,37 +1246,51 @@ describe('POST /webhook', () => {
   });
 
   it('legacy format: 400 invalid direction', async () => {
-    expect((await SELF.fetch(makeReq({ ...legacyValid, direction: 'sideways' }, 'test-secret'))).status).toBe(400);
+    expect(
+      (await SELF.fetch(makeReq({ ...legacyValid, direction: 'sideways' }, 'test-secret'))).status
+    ).toBe(400);
   });
 
   it('legacy format: 400 invalid fuel_type', async () => {
-    expect((await SELF.fetch(makeReq({ ...legacyValid, fuel_type: 'jet' }, 'test-secret'))).status).toBe(400);
+    expect(
+      (await SELF.fetch(makeReq({ ...legacyValid, fuel_type: 'jet' }, 'test-secret'))).status
+    ).toBe(400);
   });
 
   it('legacy format: 400 non-number predicted_price', async () => {
-    expect((await SELF.fetch(makeReq({ ...legacyValid, predicted_price: 'lots' }, 'test-secret'))).status).toBe(400);
+    expect(
+      (await SELF.fetch(makeReq({ ...legacyValid, predicted_price: 'lots' }, 'test-secret'))).status
+    ).toBe(400);
   });
 
   it('legacy format: 400 non-number current_price', async () => {
-    expect((await SELF.fetch(makeReq({ ...legacyValid, current_price: 'some' }, 'test-secret'))).status).toBe(400);
+    expect(
+      (await SELF.fetch(makeReq({ ...legacyValid, current_price: 'some' }, 'test-secret'))).status
+    ).toBe(400);
   });
 
   // ── Auth ───────────────────────────────────────────────────────────────────
-  it('401 wrong secret', async () => { expect((await SELF.fetch(makeReq(newFormat, 'wrong'))).status).toBe(401); });
+  it('401 wrong secret', async () => {
+    expect((await SELF.fetch(makeReq(newFormat, 'wrong'))).status).toBe(401);
+  });
   it('401 no secret', async () => {
-    const res = await SELF.fetch(new Request('https://hfxgas.ca/webhook', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(newFormat),
-    }));
+    const res = await SELF.fetch(
+      new Request('https://hfxgas.ca/webhook', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(newFormat),
+      })
+    );
     expect(res.status).toBe(401);
   });
   it('400 invalid JSON', async () => {
-    const res = await SELF.fetch(new Request('https://hfxgas.ca/webhook', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer test-secret' },
-      body: 'not json',
-    }));
+    const res = await SELF.fetch(
+      new Request('https://hfxgas.ca/webhook', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer test-secret' },
+        body: 'not json',
+      })
+    );
     expect(res.status).toBe(400);
   });
 
@@ -969,7 +1324,8 @@ describe('scheduled()', () => {
       id: 'abc123',
       author: 'buckit',
       title: 'Gas prices this week',
-      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\n|Diesel| DOWN 0.7 |154.4|\nFill up tonight.',
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| UP 3.6 |162.1|\n|Diesel| DOWN 0.7 |154.4|\nFill up tonight.',
       permalink: '/r/halifax/comments/abc123/gas_prices/',
       created_utc: Math.floor(Date.now() / 1000) - 3600,
       subreddit: 'halifax',
@@ -1000,27 +1356,20 @@ describe('scheduled()', () => {
   }
 
   // Helper: build a fetch mock that discriminates by URL.
-  // new.json → returns the buckit post listing; top.json → returns community context posts.
+  // new.rss → returns the buckit post listing as RSS; top.rss → returns community context posts.
   function mockFetchForScheduled(post = null) {
+    const now = Math.floor(Date.now() / 1000);
     return vi.fn().mockImplementation((url) => {
-      if (url.includes('new.json')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ data: { children: post ? [{ data: post }] : [] } }),
-        });
+      if (url.includes('new.rss')) {
+        const xml = makeRssXml(post ? [post] : []);
+        return Promise.resolve({ ok: true, text: async () => xml });
       }
-      // top.json (community context) — return a couple of sample titles
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          data: {
-            children: [
-              { data: { title: 'Pothole on Quinpool' } },
-              { data: { title: 'Bridge closure update' } },
-            ],
-          },
-        }),
-      });
+      // top.rss (community context) — return a couple of sample titles
+      const xml = makeRssXml([
+        { author: 'user1', title: 'Pothole on Quinpool', id: 'ctx1', permalink: '/r/h/comments/ctx1/', created_utc: now },
+        { author: 'user2', title: 'Bridge closure update', id: 'ctx2', permalink: '/r/h/comments/ctx2/', created_utc: now },
+      ]);
+      return Promise.resolve({ ok: true, text: async () => xml });
     });
   }
 
@@ -1085,21 +1434,50 @@ describe('scheduled()', () => {
     expect(history.length).toBe(10);
   });
 
+  it('stores latest_image_prompt in KV when image generated', async () => {
+    const e = envWithAI();
+    global.fetch = mockFetchForScheduled(tablePost());
+    await worker.scheduled({}, e, {});
+    const storedPrompt = await env.PREDICTIONS.get('latest_image_prompt');
+    expect(storedPrompt).not.toBeNull();
+    expect(storedPrompt).toContain('Halifax Nova Scotia gas prices');
+    expect(storedPrompt).toContain('going UP');
+  });
+
   it('no image key when AI returns no image', async () => {
-    const e = { ...env, AI: { run: vi.fn().mockResolvedValue({ image: null }) }, IMAGES: { get: vi.fn(), put: vi.fn() } };
+    const e = {
+      ...env,
+      AI: { run: vi.fn().mockResolvedValue({ image: null }) },
+      IMAGES: { get: vi.fn(), put: vi.fn() },
+    };
     global.fetch = mockFetchForScheduled(tablePost());
     await worker.scheduled({}, e, {});
     expect(await env.PREDICTIONS.get('latest_image_key')).toBeNull();
+    expect(await env.PREDICTIONS.get('latest_image_prompt')).toBeNull();
   });
 
   it('no image generated for no-change direction', async () => {
     const e = { ...env, AI: { run: vi.fn() }, IMAGES: { get: vi.fn(), put: vi.fn() } };
     const noChangePost = tablePost({
-      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |127.5|\n|Diesel| NO CHANGE |154.4|',
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |127.5|\n|Diesel| NO CHANGE |154.4|',
     });
     global.fetch = mockFetchForScheduled(noChangePost);
     await worker.scheduled({}, e, {});
     expect(e.AI.run).not.toHaveBeenCalled();
+  });
+
+  it('image generated using diesel direction when gas is no-change', async () => {
+    const e = envWithAI();
+    const mixedPost = tablePost({
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |136.2|\n|Diesel| UP 5.3 |187.1|',
+    });
+    global.fetch = mockFetchForScheduled(mixedPost);
+    await worker.scheduled({}, e, {});
+    expect(e.AI.run).toHaveBeenCalledOnce();
+    const promptArg = e.AI.run.mock.calls[0][1].prompt;
+    expect(promptArg).toContain('up');
   });
 
   it('ignores non-buckit author', async () => {
@@ -1116,7 +1494,9 @@ describe('scheduled()', () => {
   });
 
   it('ignores posts older than 7 days', async () => {
-    global.fetch = mockFetchForScheduled(tablePost({ created_utc: Math.floor(Date.now() / 1000) - 8 * 86400 }));
+    global.fetch = mockFetchForScheduled(
+      tablePost({ created_utc: Math.floor(Date.now() / 1000) - 8 * 86400 })
+    );
     await worker.scheduled({}, env, {});
     expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
   });

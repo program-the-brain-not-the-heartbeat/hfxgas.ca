@@ -19,7 +19,9 @@ function makeMcp(kvData = {}) {
     MAX_HISTORY: '10',
     PREDICTIONS: {
       get: async (key) => store[key] ?? null,
-      put: async (key, value) => { store[key] = value; },
+      put: async (key, value) => {
+        store[key] = value;
+      },
     },
     IMAGES: { get: async () => null, put: async () => {} },
     AI: { run: async () => ({ image: null }) },
@@ -43,7 +45,12 @@ describe('get_latest_prediction (no auth required)', () => {
   });
 
   it('returns prediction when available', async () => {
-    const pred = { direction: 'up', predictedPrice: 1.72, fuelType: 'gas', updated_at: new Date().toISOString() };
+    const pred = {
+      direction: 'up',
+      predictedPrice: 1.72,
+      fuelType: 'gas',
+      updated_at: new Date().toISOString(),
+    };
     const mcp = makeMcp({ latest_prediction: JSON.stringify(pred) });
     const result = await mcp.get_latest_prediction();
     expect(result.direction).toBe('up');
@@ -60,8 +67,18 @@ describe('get_prediction_history (no auth required)', () => {
 
   it('returns history array', async () => {
     const history = [
-      { direction: 'up', predictedPrice: 1.72, fuelType: 'gas', updated_at: new Date().toISOString() },
-      { direction: 'down', predictedPrice: 1.65, fuelType: 'gas', updated_at: new Date().toISOString() },
+      {
+        direction: 'up',
+        predictedPrice: 1.72,
+        fuelType: 'gas',
+        updated_at: new Date().toISOString(),
+      },
+      {
+        direction: 'down',
+        predictedPrice: 1.65,
+        fuelType: 'gas',
+        updated_at: new Date().toISOString(),
+      },
     ];
     const mcp = makeMcp({ prediction_history: JSON.stringify(history) });
     const result = await mcp.get_prediction_history();
@@ -105,7 +122,12 @@ describe('get_status (no auth required)', () => {
   });
 
   it('returns status with data when prediction exists', async () => {
-    const pred = { direction: 'up', predictedPrice: 1.72, fuelType: 'gas', updated_at: '2024-11-14T17:00:00.000Z' };
+    const pred = {
+      direction: 'up',
+      predictedPrice: 1.72,
+      fuelType: 'gas',
+      updated_at: '2024-11-14T17:00:00.000Z',
+    };
     const mcp = makeMcp({
       latest_prediction: JSON.stringify(pred),
       latest_image_key: 'images/abc123.png',

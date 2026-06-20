@@ -17,12 +17,12 @@ tasks:
   # ── Development ────────────────────────────────────────────────────────────
   dev:
     desc: Start local dev server (hot reload)
-    cmd: wrangler dev
+    cmd: npx wrangler dev
 
   dev:cron:
     desc: Trigger the cron handler locally and show output
     cmds:
-      - wrangler dev --test-scheduled &
+      - npx wrangler dev --test-scheduled &
       - sleep 2
       - curl -s "http://localhost:8787/__scheduled" | jq .
       - pkill -f "wrangler dev" || true
@@ -67,30 +67,30 @@ tasks:
   # ── Cloudflare Setup (run once) ────────────────────────────────────────────
   kv:create:
     desc: Create the PREDICTIONS KV namespace in Cloudflare
-    cmd: wrangler kv namespace create PREDICTIONS
+    cmd: npx wrangler kv namespace create PREDICTIONS
 
   r2:create:
     desc: Create the IMAGES R2 bucket in Cloudflare
-    cmd: wrangler r2 bucket create buckit-images
+    cmd: npx wrangler r2 bucket create buckit-images
 
   secret:
     desc: Interactively set WEBHOOK_SECRET in Cloudflare
-    cmd: wrangler secret put WEBHOOK_SECRET
+    cmd: npx wrangler secret put WEBHOOK_SECRET
 
   # ── Deployment ─────────────────────────────────────────────────────────────
   deploy:
     desc: Deploy to Cloudflare (runs checks first)
     deps: [check]
-    cmd: wrangler deploy
+    cmd: npx wrangler deploy
 
   deploy:skip-checks:
     desc: Deploy without running checks (emergency only)
-    cmd: wrangler deploy
+    cmd: npx wrangler deploy
 
   # ── Operations ─────────────────────────────────────────────────────────────
   logs:
     desc: Stream live Worker logs from Cloudflare
-    cmd: wrangler tail
+    cmd: npx wrangler tail
 
   scan:
     desc: Manually trigger a Reddit scan via MCP (requires WEBHOOK_SECRET env var)
@@ -98,6 +98,12 @@ tasks:
       curl -s -X POST https://hfxgas.ca/mcp \
         -H "Content-Type: application/json" \
         -d "{\"method\":\"tools/call\",\"params\":{\"name\":\"trigger_reddit_scan\",\"arguments\":{\"secret\":\"$WEBHOOK_SECRET\"}}}" | jq .
+
+  scan:force:
+    desc: Clear dedup key and re-scan Reddit (regenerates image for latest post)
+    cmds:
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false last_processed_post_id
+      - task: scan
 
   # ── u/buckit Access ────────────────────────────────────────────────────────
   # Quick commands for posting a manual prediction update.
@@ -107,7 +113,7 @@ tasks:
   #           WEBHOOK_SECRET=xxx task buckit:update -- up 3.6 1.621 down 0.7 1.544
 
   buckit:gas:
-    desc: "Post a gas-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:gas -- up 3.6 1.621)"
+    desc: 'Post a gas-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:gas -- up 3.6 1.621)'
     cmd: |
       curl -s -X POST https://hfxgas.ca/webhook \
         -H "Authorization: Bearer $WEBHOOK_SECRET" \
@@ -115,7 +121,7 @@ tasks:
         -d "{\"gas\":{\"direction\":\"{{.CLI_ARGS | splitList \" \" | first}}\",\"adjustment\":{{.CLI_ARGS | splitList \" \" | rest | first}},\"price\":{{.CLI_ARGS | splitList \" \" | last}}}}" | jq .
 
   buckit:diesel:
-    desc: "Post a diesel-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:diesel -- down 0.7 1.544)"
+    desc: 'Post a diesel-only update. Args: <direction> <adjustment> <price> (e.g. task buckit:diesel -- down 0.7 1.544)'
     cmd: |
       curl -s -X POST https://hfxgas.ca/webhook \
         -H "Authorization: Bearer $WEBHOOK_SECRET" \
@@ -142,15 +148,16 @@ tasks:
   kv:clear:
     desc: Clear all KV prediction data (destructive — use with care)
     cmds:
-      - wrangler kv key delete --binding PREDICTIONS latest_prediction
-      - wrangler kv key delete --binding PREDICTIONS prediction_history
-      - wrangler kv key delete --binding PREDICTIONS latest_image_key
-      - wrangler kv key delete --binding PREDICTIONS last_processed_post_id
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false latest_prediction
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false prediction_history
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false latest_image_key
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false latest_image_prompt
+      - npx wrangler kv key delete --binding PREDICTIONS --preview false last_processed_post_id
       - echo "KV cleared."
 
   force:deploy:
     desc: Force redeploy, skipping all checks (emergency use only)
-    cmd: wrangler deploy
+    cmd: npx wrangler deploy
 
   # ── Docs (VitePress) ───────────────────────────────────────────────────────
   docs:sync:
