@@ -19,7 +19,7 @@
   },
   "scripts": {},
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "workers-mcp": "^0.0.12"
   },
   "devDependencies": {
