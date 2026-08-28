@@ -1534,6 +1534,13 @@ describe('scheduled()', () => {
     expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
   });
 
+  it('requests the post feed with only a User-Agent header', async () => {
+    global.fetch = mockFetchForScheduled(null);
+    await worker.scheduled({}, env, {});
+    const [, options] = global.fetch.mock.calls[0];
+    expect(options.headers).toEqual({ 'User-Agent': env.REDDIT_USER_AGENT });
+  });
+
   it('skips the community context fetch when no post is found', async () => {
     global.fetch = mockFetchForScheduled(null);
     await worker.scheduled({}, env, {});
