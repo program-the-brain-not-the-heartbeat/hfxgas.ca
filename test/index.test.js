@@ -1529,8 +1529,97 @@ describe('scheduled()', () => {
   });
 
   it('handles Reddit 429 gracefully', async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429 });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, headers: new Headers() });
     await expect(worker.scheduled({}, env, {})).resolves.not.toThrow();
+    expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('skips the community context fetch when no post is found', async () => {
+    global.fetch = mockFetchForScheduled(null);
+    await worker.scheduled({}, env, {});
+    const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((u) => u.includes('top.rss'))).toHaveLength(0);
+  });
+
+  it('skips the community context fetch when no image will be generated', async () => {
+    const e = { ...env, AI: { run: vi.fn() }, IMAGES: { get: vi.fn(), put: vi.fn() } };
+    const noChangePost = tablePost({
+      selftext:
+        '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Regular| NO CHANGE |127.5|\n|Diesel| NO CHANGE |154.4|',
+    });
+    global.fetch = mockFetchForScheduled(noChangePost);
+    await worker.scheduled({}, e, {});
+    const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((u) => u.includes('top.rss'))).toHaveLength(0);
+  });
+
+  it('retries once when a 429 carries a short Retry-After', async () => {
+    const xml = makeRssXml([tablePost()]);
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ 'retry-after': '1' }),
+      })
+      .mockResolvedValue({ ok: true, text: async () => xml });
+
+    await worker.scheduled({}, envWithAI(), {});
+
+    const newRssCalls = global.fetch.mock.calls.filter(([url]) => url.includes('new.rss'));
+    expect(newRssCalls).toHaveLength(2);
+    expect(await env.PREDICTIONS.get('latest_prediction')).not.toBeNull();
+  });
+
+  it('does not retry a non-429 failure', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Headers({ 'retry-after': '1' }),
+    });
+
+    await worker.scheduled({}, env, {});
+
+    expect(global.fetch).toHaveBeenCalledOnce();
+    expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('does not retry when Retry-After is an HTTP-date', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }),
+    });
+
+    await worker.scheduled({}, env, {});
+
+    expect(global.fetch).toHaveBeenCalledOnce();
+    expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('gives up when the retry also fails', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '0' }),
+    });
+
+    await worker.scheduled({}, env, {});
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('does not retry when Retry-After exceeds the cap', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '600' }),
+    });
+
+    await worker.scheduled({}, env, {});
+
+    expect(global.fetch).toHaveBeenCalledOnce();
     expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
   });
 
