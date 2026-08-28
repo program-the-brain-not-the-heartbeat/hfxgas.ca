@@ -21,6 +21,7 @@ import {
   parseAdjustment,
   parseRedditPost,
   parseRssEntries,
+  parseJsonEntries,
   buildChartData,
   renderHtml,
 } from '../src/index.js';
@@ -88,6 +89,54 @@ describe('decodeHtmlEntities', () => {
   });
   it('returns empty string for non-string', () => {
     expect(decodeHtmlEntities(null)).toBe('');
+  });
+});
+
+describe('parseJsonEntries', () => {
+  function listing(children) {
+    return { data: { children: children.map((data) => ({ kind: 't3', data })) } };
+  }
+
+  it('maps a Reddit listing to the shape parseRssEntries produces', () => {
+    const entries = parseJsonEntries(
+      listing([
+        {
+          author: 'Buckit',
+          title: 'Weekly Gas Post',
+          id: 'abc123',
+          permalink: '/r/halifax/comments/abc123/weekly_gas_post/',
+          created_utc: 1756400000,
+          selftext: '|Type|Adjustment|New Min Price|\n|Regular| UP 2.4 |188.2|',
+        },
+      ])
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      author: 'Buckit',
+      title: 'Weekly Gas Post',
+      id: 'abc123',
+      permalink: '/r/halifax/comments/abc123/weekly_gas_post/',
+      created_utc: 1756400000,
+      selftext: '|Type|Adjustment|New Min Price|\n|Regular| UP 2.4 |188.2|',
+    });
+  });
+
+  it('returns an empty array for an empty listing', () => {
+    expect(parseJsonEntries(listing([]))).toEqual([]);
+  });
+
+  it('returns an empty array for a malformed payload', () => {
+    expect(parseJsonEntries({})).toEqual([]);
+    expect(parseJsonEntries(null)).toEqual([]);
+  });
+
+  it('defaults missing selftext to an empty string', () => {
+    const entries = parseJsonEntries(
+      listing([{ author: 'Buckit', title: 'Link post', id: 'x1', created_utc: 1756400000 }])
+    );
+    expect(entries[0].selftext).toBe('');
+    expect(entries[0].permalink).toBe('');
   });
 });
 
@@ -1446,7 +1495,47 @@ describe('scheduled()', () => {
     await env.PREDICTIONS.delete('last_processed_post_id');
     await env.PREDICTIONS.delete('latest_image_key');
     await env.PREDICTIONS.delete('latest_image_prompt');
+    await env.PREDICTIONS.delete('reddit_access_token');
   });
+
+  // env with OAuth credentials configured
+  function envWithCreds(overrides = {}) {
+    return {
+      ...env,
+      REDDIT_CLIENT_ID: 'test-client-id',
+      REDDIT_CLIENT_SECRET: 'test-client-secret',
+      AI: { run: vi.fn().mockResolvedValue({ image: btoa('fake-png') }) },
+      IMAGES: { get: vi.fn().mockResolvedValue(null), put: vi.fn() },
+      ...overrides,
+    };
+  }
+
+  // fetch mock covering the token endpoint, the authenticated listing, and the RSS fallback
+  function mockFetchForOauth({ post = null, tokenOk = true, listingOk = true } = {}) {
+    return vi.fn().mockImplementation((url) => {
+      if (url.includes('access_token')) {
+        if (!tokenOk) return Promise.resolve({ ok: false, status: 401, headers: new Headers() });
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ access_token: 'tok-abc', expires_in: 86400 }),
+        });
+      }
+      if (url.includes('oauth.reddit.com')) {
+        if (!listingOk) return Promise.resolve({ ok: false, status: 500, headers: new Headers() });
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: { children: post ? [{ kind: 't3', data: post }] : [] },
+          }),
+        });
+      }
+      // www.reddit.com RSS fallback
+      return Promise.resolve({
+        ok: true,
+        text: async () => makeRssXml(post ? [post] : []),
+      });
+    });
+  }
 
   // Post with table format (matches real /u/buckit posts)
   function tablePost(overrides = {}) {
@@ -1532,6 +1621,56 @@ describe('scheduled()', () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, headers: new Headers() });
     await expect(worker.scheduled({}, env, {})).resolves.not.toThrow();
     expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('uses the authenticated API with a bearer token when credentials are set', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost() });
+    await worker.scheduled({}, envWithCreds(), {});
+
+    const listingCall = global.fetch.mock.calls.find(([url]) => url.includes('oauth.reddit.com'));
+    expect(listingCall).toBeDefined();
+    expect(listingCall[1].headers.Authorization).toBe('Bearer tok-abc');
+
+    const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
+    expect(stored.gas.direction).toBe('up');
+  });
+
+  it('caches the access token in KV and reuses it', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost() });
+    await worker.scheduled({}, envWithCreds(), {});
+    expect(await env.PREDICTIONS.get('reddit_access_token')).toBe('tok-abc');
+
+    // Second run with the post already processed should not re-request a token
+    global.fetch = mockFetchForOauth({ post: tablePost() });
+    await worker.scheduled({}, envWithCreds(), {});
+    const tokenCalls = global.fetch.mock.calls.filter(([url]) => url.includes('access_token'));
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  it('falls back to the public RSS feed when the token request fails', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost(), tokenOk: false });
+    await worker.scheduled({}, envWithCreds(), {});
+
+    const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(urls.some((u) => u.includes('new.rss'))).toBe(true);
+    expect(await env.PREDICTIONS.get('latest_prediction')).not.toBeNull();
+  });
+
+  it('falls back to the public RSS feed when the authenticated listing fails', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost(), listingOk: false });
+    await worker.scheduled({}, envWithCreds(), {});
+
+    const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(urls.some((u) => u.includes('new.rss'))).toBe(true);
+    expect(await env.PREDICTIONS.get('latest_prediction')).not.toBeNull();
+  });
+
+  it('does not request a token when credentials are absent', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost() });
+    await worker.scheduled({}, envWithAI(), {});
+    const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(urls.some((u) => u.includes('access_token'))).toBe(false);
+    expect(urls.some((u) => u.includes('new.rss'))).toBe(true);
   });
 
   it('requests the post feed with only a User-Agent header', async () => {
