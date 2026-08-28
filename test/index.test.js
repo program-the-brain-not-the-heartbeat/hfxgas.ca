@@ -1711,6 +1711,15 @@ describe('scheduled()', () => {
     expect(promptArg).toContain('up');
   });
 
+  it('calls Workers AI with the steps parameter the model accepts', async () => {
+    const e = envWithAI();
+    global.fetch = mockFetchForScheduled(tablePost());
+    await worker.scheduled({}, e, {});
+    const options = e.AI.run.mock.calls[0][1];
+    expect(options).toHaveProperty('steps');
+    expect(options).not.toHaveProperty('num_steps');
+  });
+
   it('ignores non-buckit author', async () => {
     global.fetch = mockFetchForScheduled(tablePost({ author: 'someoneelse' }));
     await worker.scheduled({}, env, {});
