@@ -442,13 +442,7 @@ const MAX_RETRY_AFTER_MS = 5000;
  * @returns {Promise<Response|null>} A successful response, or null if the fetch failed.
  */
 async function fetchRedditFeed(url, env) {
-  const options = {
-    headers: {
-      'User-Agent': env.REDDIT_USER_AGENT,
-      'Cache-Control': 'no-cache',
-      Pragma: 'no-cache',
-    },
-  };
+  const options = { headers: { 'User-Agent': env.REDDIT_USER_AGENT } };
 
   const res = await fetch(url, options);
   if (res.ok) return res;
