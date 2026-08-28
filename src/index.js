@@ -427,6 +427,50 @@ export function parseRssEntries(xml) {
 
 // ── Reddit Scraper ───────────────────────────────────────────────────────────
 
+// Longest Retry-After we are willing to wait out inside a single cron run.
+const MAX_RETRY_AFTER_MS = 5000;
+
+/**
+ * Fetch a Reddit RSS feed, retrying once only when Reddit asks us to wait a short time.
+ *
+ * A 429 with no Retry-After (or a long one) is NOT retried: Cloudflare Workers share
+ * egress IPs, so re-requesting a throttled endpoint adds load without improving our
+ * odds. The hourly cron is the retry in that case.
+ *
+ * @param {string} url
+ * @param {object} env
+ * @returns {Promise<Response|null>} A successful response, or null if the fetch failed.
+ */
+async function fetchRedditFeed(url, env) {
+  const options = {
+    headers: {
+      'User-Agent': env.REDDIT_USER_AGENT,
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    },
+  };
+
+  const res = await fetch(url, options);
+  if (res.ok) return res;
+
+  const retryAfter = res.headers.get('retry-after');
+  console.error(
+    `Reddit fetch failed: ${res.status}${retryAfter ? ` (retry-after: ${retryAfter})` : ''}`
+  );
+  if (res.status !== 429 || !retryAfter) return null;
+
+  // Retry-After may also be an HTTP-date, which yields NaN and fails this comparison.
+  const delayMs = Number(retryAfter) * 1000;
+  if (!(delayMs >= 0 && delayMs <= MAX_RETRY_AFTER_MS)) return null;
+
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  const retry = await fetch(url, options);
+  if (retry.ok) return retry;
+
+  console.error(`Reddit fetch failed after retry: ${retry.status}`);
+  return null;
+}
+
 /**
  * Fetch the latest posts from r/halifax and return the most recent /u/buckit fuel post.
  * Uses Reddit's Atom RSS feed — the JSON API now returns 403 for unauthenticated requests.
@@ -435,14 +479,9 @@ export function parseRssEntries(xml) {
  */
 async function fetchBuckitPost(env) {
   const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.rss?limit=100`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': env.REDDIT_USER_AGENT },
-  });
+  const res = await fetchRedditFeed(url, env);
 
-  if (!res.ok) {
-    console.error(`Reddit fetch failed: ${res.status}`);
-    return null;
-  }
+  if (!res) return null;
 
   const xml = await res.text();
   const posts = parseRssEntries(xml);
@@ -1592,12 +1631,8 @@ export default {
     console.log('Cron: starting Reddit scan');
 
     let post;
-    let communityContext = [];
     try {
-      [post, communityContext] = await Promise.all([
-        fetchBuckitPost(env),
-        fetchCommunityContext(env),
-      ]);
+      post = await fetchBuckitPost(env);
     } catch (err) {
       console.error('Cron: Reddit fetch error:', err);
       return;
@@ -1639,6 +1674,9 @@ export default {
           ? parsed.diesel.direction
           : null;
     if (actionableDirection) {
+      // Community context is only used to flavour the image prompt, so it is fetched
+      // lazily — this keeps the common "no new post" run down to a single Reddit request.
+      const communityContext = await fetchCommunityContext(env);
       const imageResult = await generateAndStoreImage(
         post.id,
         actionableDirection,
