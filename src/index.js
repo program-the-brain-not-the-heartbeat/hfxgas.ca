@@ -548,7 +548,7 @@ async function generateAndStoreImage(postId, direction, communityContext, env) {
   try {
     const result = await env.AI.run('@cf/black-forest-labs/flux-1-schnell', {
       prompt,
-      num_steps: 4,
+      steps: 4,
     });
 
     if (!result?.image) {
