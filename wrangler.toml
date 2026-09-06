@@ -28,3 +28,6 @@ MAX_HISTORY = "10"
 
 # Secrets (set via: task secret)
 # WEBHOOK_SECRET — required for POST /webhook and MCP write tools
+# REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET — optional; when both are set the cron uses
+#   Reddit's authenticated API (rate-limited per client ID instead of per IP).
+#   Without them it falls back to the public RSS feed.

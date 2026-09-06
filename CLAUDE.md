@@ -107,6 +107,10 @@ A free-text fallback handles older posts. The look-back window is **7 days** (no
 ## Secret Handling
 
 - `WEBHOOK_SECRET` — stored as Cloudflare Worker secret (`task secret`)
+- `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — optional. When both are set, the cron uses
+  Reddit's authenticated API (`oauth.reddit.com`), which is rate-limited per client ID rather
+  than per IP. Without them it falls back to the public RSS feed, which Cloudflare Workers'
+  shared egress IPs get 429'd on. Create a **script**-type app at reddit.com/prefs/apps.
 - Local dev: `.dev.vars` (gitignored — never commit)
 - Never hardcode secrets. Never log secrets. Never commit `.dev.vars`.
 
