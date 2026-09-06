@@ -425,6 +425,33 @@ export function parseRssEntries(xml) {
   return entries;
 }
 
+/**
+ * Parse Reddit's JSON listing format into the same shape as parseRssEntries.
+ *
+ * Used for authenticated requests to oauth.reddit.com, which serves JSON rather
+ * than RSS. The selftext here is the author's raw markdown, so parseRedditPost
+ * matches it with the markdown-table strategy instead of the HTML-table one.
+ *
+ * @param {object} json - Parsed Reddit listing response
+ * @returns {Array<{author:string, title:string, id:string, permalink:string, created_utc:number, selftext:string}>}
+ */
+export function parseJsonEntries(json) {
+  const children = json?.data?.children;
+  if (!Array.isArray(children)) return [];
+
+  return children
+    .map((child) => child?.data)
+    .filter(Boolean)
+    .map((d) => ({
+      author: d.author ?? '',
+      title: d.title ?? '',
+      id: d.id ?? '',
+      permalink: d.permalink ?? '',
+      created_utc: d.created_utc ?? 0,
+      selftext: d.selftext ?? '',
+    }));
+}
+
 // ── Reddit Scraper ───────────────────────────────────────────────────────────
 
 // Longest Retry-After we are willing to wait out inside a single cron run.
@@ -441,8 +468,13 @@ const MAX_RETRY_AFTER_MS = 5000;
  * @param {object} env
  * @returns {Promise<Response|null>} A successful response, or null if the fetch failed.
  */
-async function fetchRedditFeed(url, env) {
-  const options = { headers: { 'User-Agent': env.REDDIT_USER_AGENT } };
+async function fetchRedditFeed(url, env, token = null) {
+  const options = {
+    headers: {
+      'User-Agent': env.REDDIT_USER_AGENT,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  };
 
   const res = await fetch(url, options);
   if (res.ok) return res;
@@ -466,19 +498,87 @@ async function fetchRedditFeed(url, env) {
 }
 
 /**
+ * Fetch the r/{subreddit}/new listing, preferring the authenticated JSON API.
+ * @param {object} env
+ * @returns {Promise<Array<object>|null>} Post-like entries, or null if both routes failed.
+ */
+async function fetchListing(env) {
+  const token = await getRedditToken(env);
+
+  if (token) {
+    const url = `https://oauth.reddit.com/r/${env.REDDIT_SUBREDDIT}/new?limit=100`;
+    const res = await fetchRedditFeed(url, env, token);
+    if (res) return parseJsonEntries(await res.json());
+    console.error('Authenticated listing failed — falling back to the public feed');
+  }
+
+  const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.rss?limit=100`;
+  const res = await fetchRedditFeed(url, env);
+  if (!res) return null;
+
+  return parseRssEntries(await res.text());
+}
+
+const REDDIT_TOKEN_KEY = 'reddit_access_token';
+
+/**
+ * Get an application-only OAuth token, cached in KV until shortly before it expires.
+ *
+ * Authenticated requests are rate-limited per client ID rather than per IP, which is
+ * what gets us out of Cloudflare's shared — and heavily throttled — egress pool.
+ *
+ * Returns null when credentials are unset or the token request fails, so callers
+ * fall back to the public RSS feed rather than losing an entire cron run.
+ *
+ * @param {object} env
+ * @returns {Promise<string|null>}
+ */
+async function getRedditToken(env) {
+  if (!env.REDDIT_CLIENT_ID || !env.REDDIT_CLIENT_SECRET) return null;
+
+  const cached = await env.PREDICTIONS.get(REDDIT_TOKEN_KEY);
+  if (cached) return cached;
+
+  const res = await fetch('https://www.reddit.com/api/v1/access_token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${env.REDDIT_CLIENT_ID}:${env.REDDIT_CLIENT_SECRET}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': env.REDDIT_USER_AGENT,
+    },
+    body: 'grant_type=client_credentials',
+  });
+
+  if (!res.ok) {
+    console.error(`Reddit token request failed: ${res.status}`);
+    return null;
+  }
+
+  const data = await res.json();
+  if (!data?.access_token) {
+    console.error('Reddit token response contained no access_token');
+    return null;
+  }
+
+  // Expire a minute early so a run never picks up a token that dies mid-request.
+  // KV enforces a 60s floor on expirationTtl.
+  const ttl = Math.max(60, (data.expires_in ?? 3600) - 60);
+  await env.PREDICTIONS.put(REDDIT_TOKEN_KEY, data.access_token, { expirationTtl: ttl });
+  return data.access_token;
+}
+
+/**
  * Fetch the latest posts from r/halifax and return the most recent /u/buckit fuel post.
- * Uses Reddit's Atom RSS feed — the JSON API now returns 403 for unauthenticated requests.
+ *
+ * Prefers the authenticated JSON API (per-client rate limit); falls back to the public
+ * Atom RSS feed when credentials are absent or the authenticated attempt fails.
+ *
  * @param {object} env
  * @returns {Promise<object|null>}
  */
 async function fetchBuckitPost(env) {
-  const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.rss?limit=100`;
-  const res = await fetchRedditFeed(url, env);
-
-  if (!res) return null;
-
-  const xml = await res.text();
-  const posts = parseRssEntries(xml);
+  const posts = await fetchListing(env);
+  if (!posts) return null;
 
   // Match weekly gas posts AND interrupter clause posts (can happen any day).
   // We look back 7 days to avoid missing anything; dedup in scheduled() prevents reprocessing.
