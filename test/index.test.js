@@ -24,6 +24,8 @@ import {
   parseJsonEntries,
   buildChartData,
   renderHtml,
+  isPredictionStale,
+  isPipelineStale,
 } from '../src/index.js';
 import worker from '../src/index.js';
 
@@ -807,6 +809,47 @@ describe('parseRedditPost', () => {
 
 // ── buildChartData ─────────────────────────────────────────────────────────────
 
+describe('isPredictionStale', () => {
+  // These two cases bracket any sensible threshold, so they hold whatever policy is chosen.
+  it('treats a prediction written a minute ago as fresh', () => {
+    expect(isPredictionStale(new Date(Date.now() - 60 * 1000).toISOString())).toBe(false);
+  });
+
+  it('keeps a six-day-old prediction fresh, matching the weekly posting cadence', () => {
+    // buckit posts weekly, so Thursday's numbers are still current the following Wednesday.
+    // Flagging those as stale would cry wolf most of every week.
+    expect(isPredictionStale(new Date(Date.now() - 6 * 86400 * 1000).toISOString())).toBe(false);
+  });
+
+  it('treats a prediction written 60 days ago as stale', () => {
+    expect(isPredictionStale(new Date(Date.now() - 60 * 86400 * 1000).toISOString())).toBe(true);
+  });
+
+  it('treats a missing timestamp as stale', () => {
+    expect(isPredictionStale(null)).toBe(true);
+  });
+
+  it('treats an unparseable timestamp as stale', () => {
+    expect(isPredictionStale('not-a-date')).toBe(true);
+  });
+});
+
+describe('isPipelineStale', () => {
+  it('treats a check from a minute ago as healthy', () => {
+    expect(isPipelineStale(new Date(Date.now() - 60 * 1000).toISOString())).toBe(false);
+  });
+
+  it('treats a check from 18 hours ago as stale', () => {
+    // Mirrors the 2026-09-11 incident: the cron kept running, but had not reached Reddit
+    // since the previous evening.
+    expect(isPipelineStale(new Date(Date.now() - 18 * 3600 * 1000).toISOString())).toBe(true);
+  });
+
+  it('treats a pipeline that has never checked in as stale', () => {
+    expect(isPipelineStale(null)).toBe(true);
+  });
+});
+
 describe('buildChartData', () => {
   it('returns empty arrays for empty history', () => {
     const r = buildChartData([]);
@@ -867,6 +910,20 @@ describe('renderHtml', () => {
     imagePrompt: null,
     siteUrl: 'https://hfxgas.ca',
     ...overrides,
+  });
+
+  it('flags the reading as stale when the data is older than the threshold', () => {
+    const html = renderHtml(
+      opts({ prediction: { ...basePrediction, updated_at: new Date(0).toISOString() } })
+    );
+    expect(html).toContain('class="updated-at updated-at--stale"');
+  });
+
+  it('does not flag a freshly written reading as stale', () => {
+    const html = renderHtml(
+      opts({ prediction: { ...basePrediction, updated_at: new Date().toISOString() } })
+    );
+    expect(html).not.toContain('class="updated-at updated-at--stale"');
   });
 
   it('renders DOCTYPE HTML', () => {
@@ -1225,12 +1282,41 @@ describe('GET /', () => {
 describe('GET /api/latest', () => {
   beforeEach(async () => {
     await env.PREDICTIONS.delete('latest_prediction');
+    await env.PREDICTIONS.delete('last_successful_check');
+  });
+
+  it('reports pipeline health from the heartbeat', async () => {
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({ gas: null, diesel: null, updated_at: new Date().toISOString() })
+    );
+    await env.PREDICTIONS.put(
+      'last_successful_check',
+      new Date(Date.now() - 18 * 3600 * 1000).toISOString()
+    );
+    const data = await (await workerExports.default.fetch('https://hfxgas.ca/api/latest')).json();
+    expect(data.last_successful_check).not.toBeNull();
+    expect(data.pipeline_stale).toBe(true);
   });
 
   it('null when empty', async () => {
     expect(
       await (await workerExports.default.fetch('https://hfxgas.ca/api/latest')).json()
     ).toBeNull();
+  });
+
+  it('reports data age and staleness alongside the prediction', async () => {
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({
+        gas: { direction: 'down', adjustment: 1.1, price: 1.55 },
+        diesel: null,
+        updated_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+      })
+    );
+    const data = await (await workerExports.default.fetch('https://hfxgas.ca/api/latest')).json();
+    expect(data.age_hours).toBeCloseTo(3, 1);
+    expect(data.stale).toBe(false);
   });
 
   it('returns prediction JSON', async () => {
@@ -1496,6 +1582,7 @@ describe('scheduled()', () => {
     await env.PREDICTIONS.delete('latest_image_key');
     await env.PREDICTIONS.delete('latest_image_prompt');
     await env.PREDICTIONS.delete('reddit_access_token');
+    await env.PREDICTIONS.delete('last_successful_check');
   });
 
   // env with OAuth credentials configured
@@ -1621,6 +1708,22 @@ describe('scheduled()', () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, headers: new Headers() });
     await expect(worker.scheduled({}, env, {})).resolves.not.toThrow();
     expect(await env.PREDICTIONS.get('latest_prediction')).toBeNull();
+  });
+
+  it('reports a failed Reddit fetch distinctly from "no matching post"', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, headers: new Headers() });
+
+    await worker.scheduled({}, env, {});
+
+    const errors = errSpy.mock.calls.flat().join(' ');
+    const logs = logSpy.mock.calls.flat().join(' ');
+    expect(errors).toContain('Reddit fetch error');
+    expect(logs).not.toContain('no matching post');
+
+    errSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   it('uses the authenticated API with a bearer token when credentials are set', async () => {
@@ -1877,6 +1980,78 @@ describe('scheduled()', () => {
     global.fetch = mockFetchForScheduled(tablePost({ author: 'Buckit' }));
     await worker.scheduled({}, e, {});
     expect(await env.PREDICTIONS.get('latest_prediction')).not.toBeNull();
+  });
+
+  it('carries the unlisted fuel forward when an interrupter post lists only one', async () => {
+    await env.PREDICTIONS.put(
+      'latest_prediction',
+      JSON.stringify({
+        gas: { direction: 'down', adjustment: 2.3, price: 1.902 },
+        diesel: { direction: 'down', adjustment: 3.9, price: 2.523 },
+        updated_at: new Date().toISOString(),
+      })
+    );
+    const dieselOnly = tablePost({
+      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Diesel| UP 15.0 |267.3|',
+    });
+    global.fetch = mockFetchForScheduled(dieselOnly);
+
+    await worker.scheduled({}, envWithAI(), {});
+
+    const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
+    expect(stored.diesel.direction).toBe('up');
+    expect(stored.gas).not.toBeNull();
+    expect(stored.gas.price).toBeCloseTo(1.902);
+  });
+
+  it('leaves an unlisted fuel null when there is no previous reading to carry', async () => {
+    const dieselOnly = tablePost({
+      selftext: '|Type|Adjustment|New Min Price|\n:--|:--|:--|\n|Diesel| UP 15.0 |267.3|',
+    });
+    global.fetch = mockFetchForScheduled(dieselOnly);
+
+    await worker.scheduled({}, envWithAI(), {});
+
+    const stored = JSON.parse(await env.PREDICTIONS.get('latest_prediction'));
+    expect(stored.gas).toBeNull();
+  });
+
+  it('records a heartbeat when the Reddit fetch succeeds', async () => {
+    global.fetch = mockFetchForScheduled(null);
+
+    await worker.scheduled({}, env, {});
+
+    expect(await env.PREDICTIONS.get('last_successful_check')).not.toBeNull();
+  });
+
+  it('records no heartbeat when the Reddit fetch fails', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429, headers: new Headers() });
+
+    await worker.scheduled({}, env, {});
+
+    expect(await env.PREDICTIONS.get('last_successful_check')).toBeNull();
+  });
+
+  it('warns when the feed is shallower than the look-back window', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Every entry is recent, so the 100-post feed cannot actually reach back 7 days.
+    global.fetch = mockFetchForScheduled(tablePost());
+
+    await worker.scheduled({}, envWithAI(), {});
+
+    expect(warnSpy.mock.calls.flat().join(' ')).toContain('feed depth');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when the feed reaches past the look-back window', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const old = Math.floor(Date.now() / 1000) - 9 * 86400;
+    global.fetch = mockFetchForScheduled(tablePost({ created_utc: old }));
+
+    await worker.scheduled({}, envWithAI(), {});
+
+    expect(warnSpy.mock.calls.flat().join(' ')).not.toContain('feed depth');
+    warnSpy.mockRestore();
   });
 
   it('ignores posts older than 7 days', async () => {

@@ -6,6 +6,14 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["0 * * * *"]
 
+# Workers Logs — retain cron/fetch logs so a failed Reddit scan can be diagnosed after the
+# fact. Without this, a silent staleness incident can only be caught by a live `wrangler tail`
+# running at the top of the hour. head_sampling_rate = 1 keeps every invocation: this Worker
+# runs hourly plus light site traffic, so the volume is negligible.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [[kv_namespaces]]
 binding = "PREDICTIONS"
 id = "07cd82600a824364b919db2c1cbc2663"

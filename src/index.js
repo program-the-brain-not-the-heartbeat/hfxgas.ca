@@ -126,6 +126,72 @@ export function formatDate(iso) {
  * @param {string|null} iso
  * @returns {string}
  */
+// Age at which a stored prediction is presented as out of date, in hours.
+// Set past the weekly posting cadence: buckit posts each Thursday, so those numbers are still
+// current the following Wednesday. A tighter bound would mark correct data stale most of every
+// week. This answers "are these numbers old?", NOT "is the scraper alive" — see below.
+const STALE_AFTER_HOURS = 8 * 24;
+
+// How long the pipeline may go without a successful Reddit fetch before it is considered
+// broken. The cron runs hourly, so a few consecutive failures is already abnormal. This is the
+// signal that catches an outage: on 2026-09-11 the cron kept reporting success while being
+// 429'd for ~18h, and no data-age threshold could have seen it.
+const PIPELINE_STALE_AFTER_HOURS = 3;
+
+/**
+ * How old a stored prediction is, in hours.
+ *
+ * @param {string|null} updatedAt - ISO timestamp of the last write, or null.
+ * @param {number} [now] - Epoch milliseconds; injectable so tests need no clock mocking.
+ * @returns {number|null} Age in hours, or null when the timestamp is missing/unparseable.
+ */
+export function predictionAgeHours(updatedAt, now = Date.now()) {
+  if (!updatedAt) return null;
+  const t = new Date(updatedAt).getTime();
+  if (isNaN(t)) return null;
+  return (now - t) / 3600000;
+}
+
+/**
+ * Decide whether the scraper itself has gone quiet.
+ *
+ * Distinct from isPredictionStale: this measures whether we have successfully REACHED Reddit
+ * recently, not how old the numbers are. A quiet week is normal; an hourly cron that has not
+ * completed a fetch in hours is not.
+ *
+ * @param {string|null} lastCheck - ISO timestamp of the last successful fetch, or null.
+ * @param {number} [now] - Epoch milliseconds; injectable so tests need no clock mocking.
+ * @returns {boolean} True when the pipeline appears to be failing.
+ */
+export function isPipelineStale(lastCheck, now = Date.now()) {
+  const age = predictionAgeHours(lastCheck, now);
+  // Never having checked in is itself the failure state, not an unknown.
+  if (age === null) return true;
+  return age > PIPELINE_STALE_AFTER_HOURS;
+}
+
+/**
+ * Decide whether a stored prediction is old enough to be shown as stale.
+ *
+ * Answers "are these numbers old?" — NOT "is the scraper working?". Because u/buckit posts
+ * weekly, data several days old is still correct, so the bound sits past that cadence
+ * (STALE_AFTER_HOURS) to avoid flagging good data most of every week. A broken pipeline is
+ * invisible to this function by design; isPipelineStale covers that.
+ *
+ * Drives both the public warning on the page and the `stale` flag on /api/latest.
+ *
+ * @param {string|null} updatedAt - ISO timestamp of the last write, or null.
+ * @param {number} [now] - Epoch milliseconds; injectable so tests need no clock mocking.
+ * @returns {boolean} True when the data should be presented as out of date.
+ */
+export function isPredictionStale(updatedAt, now = Date.now()) {
+  const age = predictionAgeHours(updatedAt, now);
+  // A missing or unparseable timestamp tells us nothing about freshness, so treat it as stale
+  // rather than quietly presenting unknown-age data as current.
+  if (age === null) return true;
+  return age > STALE_AFTER_HOURS;
+}
+
 export function formatRelativeTime(iso) {
   if (!iso) return '';
   try {
@@ -458,6 +524,23 @@ export function parseJsonEntries(json) {
 const MAX_RETRY_AFTER_MS = 5000;
 
 /**
+ * Raised when a Reddit listing request could not be completed.
+ *
+ * This exists so a throttled or erroring Reddit is never mistaken for "buckit has not
+ * posted". Both used to surface as a null listing, which made a rate-limit outage look
+ * like a quiet week and left the site silently stale. Callers that can recover (the
+ * authenticated→public fallback) catch it; the cron lets it reach its error branch.
+ */
+class RedditFetchError extends Error {
+  constructor(status, url) {
+    super(`Reddit fetch failed with status ${status}: ${url}`);
+    this.name = 'RedditFetchError';
+    this.status = status;
+    this.url = url;
+  }
+}
+
+/**
  * Fetch a Reddit RSS feed, retrying once only when Reddit asks us to wait a short time.
  *
  * A 429 with no Retry-After (or a long one) is NOT retried: Cloudflare Workers share
@@ -466,7 +549,8 @@ const MAX_RETRY_AFTER_MS = 5000;
  *
  * @param {string} url
  * @param {object} env
- * @returns {Promise<Response|null>} A successful response, or null if the fetch failed.
+ * @returns {Promise<Response>} A successful response.
+ * @throws {RedditFetchError} When the request failed and is not worth retrying.
  */
 async function fetchRedditFeed(url, env, token = null) {
   const options = {
@@ -483,38 +567,48 @@ async function fetchRedditFeed(url, env, token = null) {
   console.error(
     `Reddit fetch failed: ${res.status}${retryAfter ? ` (retry-after: ${retryAfter})` : ''}`
   );
-  if (res.status !== 429 || !retryAfter) return null;
+  if (res.status !== 429 || !retryAfter) throw new RedditFetchError(res.status, url);
 
   // Retry-After may also be an HTTP-date, which yields NaN and fails this comparison.
   const delayMs = Number(retryAfter) * 1000;
-  if (!(delayMs >= 0 && delayMs <= MAX_RETRY_AFTER_MS)) return null;
+  if (!(delayMs >= 0 && delayMs <= MAX_RETRY_AFTER_MS)) {
+    throw new RedditFetchError(res.status, url);
+  }
 
   await new Promise((resolve) => setTimeout(resolve, delayMs));
   const retry = await fetch(url, options);
   if (retry.ok) return retry;
 
   console.error(`Reddit fetch failed after retry: ${retry.status}`);
-  return null;
+  throw new RedditFetchError(retry.status, url);
 }
 
 /**
  * Fetch the r/{subreddit}/new listing, preferring the authenticated JSON API.
+ *
+ * Only the authenticated attempt is recoverable — its failure falls back to the public
+ * feed. A public-feed failure propagates so the caller can tell "Reddit is unreachable"
+ * apart from "Reddit returned no matching post".
+ *
  * @param {object} env
- * @returns {Promise<Array<object>|null>} Post-like entries, or null if both routes failed.
+ * @returns {Promise<Array<object>>} Post-like entries.
+ * @throws {RedditFetchError} When the public feed could not be fetched.
  */
 async function fetchListing(env) {
   const token = await getRedditToken(env);
 
   if (token) {
     const url = `https://oauth.reddit.com/r/${env.REDDIT_SUBREDDIT}/new?limit=100`;
-    const res = await fetchRedditFeed(url, env, token);
-    if (res) return parseJsonEntries(await res.json());
-    console.error('Authenticated listing failed — falling back to the public feed');
+    try {
+      const res = await fetchRedditFeed(url, env, token);
+      return parseJsonEntries(await res.json());
+    } catch (err) {
+      console.error(`Authenticated listing failed — falling back to the public feed: ${err}`);
+    }
   }
 
   const url = `https://www.reddit.com/r/${env.REDDIT_SUBREDDIT}/new.rss?limit=100`;
   const res = await fetchRedditFeed(url, env);
-  if (!res) return null;
 
   return parseRssEntries(await res.text());
 }
@@ -567,6 +661,11 @@ async function getRedditToken(env) {
   return data.access_token;
 }
 
+// How far back the cron considers a post current. NOTE: this is an upper bound only — the
+// listing is capped at 100 posts, so actual reach is whichever is shorter (see the depth
+// warning in fetchBuckitPost).
+const LOOK_BACK_DAYS = 7;
+
 /**
  * Fetch the latest posts from r/halifax and return the most recent /u/buckit fuel post.
  *
@@ -578,19 +677,33 @@ async function getRedditToken(env) {
  */
 async function fetchBuckitPost(env) {
   const posts = await fetchListing(env);
-  if (!posts) return null;
 
   // Match weekly gas posts AND interrupter clause posts (can happen any day).
   // We look back 7 days to avoid missing anything; dedup in scheduled() prevents reprocessing.
-  const sevenDaysAgo = Date.now() / 1000 - 7 * 86400;
+  const cutoff = Date.now() / 1000 - LOOK_BACK_DAYS * 86400;
   const fuelKeywords = /gas|gasoline|diesel|fuel|price|interrupter/i;
+
+  // Reddit caps a listing at 100 posts, so on a busy subreddit the feed can be shallower
+  // than the look-back window — the real bound is feed depth, not the window. A post older
+  // than the feed's reach is invisible no matter what the window claims, so say so out loud
+  // rather than under-scanning silently.
+  if (posts.length > 0) {
+    const oldest = Math.min(...posts.map((p) => p.created_utc));
+    if (oldest > cutoff) {
+      const hours = ((Date.now() / 1000 - oldest) / 3600).toFixed(1);
+      console.warn(
+        `Reddit feed depth reaches only ${hours}h back — short of the ` +
+          `${LOOK_BACK_DAYS}-day look-back window; older posts are not visible.`
+      );
+    }
+  }
 
   return (
     posts.find(
       (p) =>
         p.author.toLowerCase() === env.REDDIT_AUTHOR.toLowerCase() &&
         fuelKeywords.test(p.title) &&
-        p.created_utc > sevenDaysAgo
+        p.created_utc > cutoff
     ) ?? null
   );
 }
@@ -800,6 +913,9 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
 
   const updatedAt = formatDate(p?.updated_at ?? null);
   const relativeTime = formatRelativeTime(p?.updated_at ?? null);
+  // Say so on the page when the numbers have aged out, rather than presenting old data with
+  // the same confidence as fresh data.
+  const isStale = isPredictionStale(p?.updated_at ?? null);
   const notesHtml = p?.notes ? `<p class="notes">${escapeHtml(p.notes)}</p>` : '';
 
   // AI image
@@ -1051,6 +1167,7 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
     /* Sign meta */
     .sign-meta { display:flex; flex-direction:column; align-items:center; gap:0.2rem; width:100%; }
     .updated-at { font-size:0.68rem; color:hsl(240 4% 36%); margin-bottom:0.2rem; }
+    .updated-at--stale { color:hsl(38 92% 62%); font-weight:600; }
     .notes { font-size:0.77rem; color:hsl(240 4% 44%); max-width:38ch; line-height:1.6; margin-bottom:0.5rem; padding:0.4rem 0.7rem; background:hsl(240 6% 12%); border-left:2px solid ${accentColor}50; border-radius:0 calc(var(--radius)*0.6) calc(var(--radius)*0.6) 0; text-align:left; font-style:italic; }
     .disclaimer { font-size:0.67rem; color:hsl(240 4% 32%); line-height:1.7; }
     .disclaimer a { color:hsl(240 4% 42%); text-decoration:underline; text-underline-offset:2px; }
@@ -1175,8 +1292,8 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
             ${renderFuelCard('diesel', p.diesel)}
           </div>
           <div class="sign-meta">
-            <time class="updated-at" datetime="${escapeHtml(p?.updated_at ?? '')}">
-              Updated ${relativeTime} &mdash; ${updatedAt} (Halifax)
+            <time class="updated-at${isStale ? ' updated-at--stale' : ''}" datetime="${escapeHtml(p?.updated_at ?? '')}">
+              Updated ${relativeTime} &mdash; ${updatedAt} (Halifax)${isStale ? ' &middot; may be out of date' : ''}
             </time>
             ${notesHtml}
           </div>
@@ -1234,7 +1351,7 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
         <p>Every Thursday, a Reddit user named <a href="https://www.reddit.com/u/buckit" rel="noopener noreferrer" target="_blank">u/buckit</a> posts the upcoming week&rsquo;s Halifax gas and diesel price predictions to <a href="https://www.reddit.com/r/halifax" rel="noopener noreferrer" target="_blank">r/halifax</a>. This site automatically finds that post, reads the numbers, and displays them in a clean format — so you don&rsquo;t have to dig through Reddit.</p>
         <p>This project was entirely created, deployed, and maintained solely via AI prompts. The only human interaction was purchasing the domain name. Zero lines of human-written code or documentation.</p>
         <h3>How does it work?</h3>
-        <p>A <a href="https://workers.cloudflare.com/" rel="noopener noreferrer" target="_blank">Cloudflare Worker</a> runs four times every Thursday. It fetches the newest posts from r/halifax, looks for u/buckit&rsquo;s prediction, parses the markdown table for regular and diesel prices, then stores the result and updates this page — all automatically, with no human in the loop.</p>
+        <p>A <a href="https://workers.cloudflare.com/" rel="noopener noreferrer" target="_blank">Cloudflare Worker</a> runs every hour. It fetches the newest posts from r/halifax and looks for u/buckit&rsquo;s prediction — the weekly Thursday post, or a mid-week interrupter clause. It parses the markdown table for regular and diesel prices, then stores the result and updates this page, all automatically with no human in the loop.</p>
         <p>The site also handles <strong>interrupter clause</strong> posts — when the Nova Scotia Utility and Review Board issues an emergency mid-week rate adjustment, those posts are caught too, any day of the week.</p>
         <h3>The meme image</h3>
         <p>When prices go up or down (not &ldquo;no change&rdquo;), the Worker generates a meme image using <a href="https://developers.cloudflare.com/workers-ai/" rel="noopener noreferrer" target="_blank">Cloudflare Workers AI</a> — specifically the <strong>Flux&nbsp;1&nbsp;Schnell</strong> text-to-image model, which runs entirely in Cloudflare&rsquo;s infrastructure.</p>
@@ -1423,7 +1540,21 @@ async function handleApiLatest(env) {
   const raw = await env.PREDICTIONS.get('latest_prediction');
   if (!raw)
     return new Response(JSON.stringify(null), { headers: { 'content-type': 'application/json' } });
-  return new Response(raw, {
+
+  // Age and staleness are derived at read time rather than stored, so they stay correct as
+  // the data sits — a consumer can tell "nobody has updated this in days" without guessing
+  // from updated_at themselves.
+  const prediction = JSON.parse(raw);
+  const lastCheck = await env.PREDICTIONS.get('last_successful_check');
+  const body = {
+    ...prediction,
+    age_hours: predictionAgeHours(prediction.updated_at),
+    stale: isPredictionStale(prediction.updated_at),
+    last_successful_check: lastCheck,
+    pipeline_stale: isPipelineStale(lastCheck),
+  };
+
+  return new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
   });
 }
@@ -1732,6 +1863,11 @@ export default {
       return;
     }
 
+    // Heartbeat — records that the pipeline actually reached Reddit, whether or not there was
+    // a new post. latest_prediction.updated_at only moves when buckit posts, so on its own it
+    // cannot tell a quiet week apart from "we have not reached Reddit in hours". This can.
+    await env.PREDICTIONS.put('last_successful_check', new Date().toISOString());
+
     if (!post) {
       console.log('Cron: no matching post found — done');
       return;
@@ -1748,9 +1884,15 @@ export default {
 
     const parsed = parseRedditPost(post);
 
+    // An interrupter-clause post often lists only the fuel that moved. Writing the parsed
+    // result straight through would blank the other fuel, so carry the previous reading
+    // forward rather than losing a price the post simply did not mention.
+    const previousRaw = await env.PREDICTIONS.get('latest_prediction');
+    const previous = previousRaw ? JSON.parse(previousRaw) : null;
+
     const prediction = {
-      gas: parsed.gas,
-      diesel: parsed.diesel,
+      gas: parsed.gas ?? previous?.gas ?? null,
+      diesel: parsed.diesel ?? previous?.diesel ?? null,
       notes: parsed.notes,
       source: 'reddit',
       post_id: post.id,
