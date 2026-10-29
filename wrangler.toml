@@ -4,7 +4,10 @@ compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
 [triggers]
-crons = ["0 * * * *"]
+# Every 15 min normally; every 5 min on Thursdays (buckit's weekly posting day), since the
+# two triggers overlap at the :00/:15/:30/:45 marks — the 5-min one just adds finer coverage
+# on the day a new post is most likely to land.
+crons = ["*/15 * * * *", "*/5 * * * 4"]
 
 # Workers Logs — retain cron/fetch logs so a failed Reddit scan can be diagnosed after the
 # fact. Without this, a silent staleness incident can only be caught by a live `wrangler tail`
@@ -33,6 +36,7 @@ REDDIT_USER_AGENT = "Buckit/1.0 (github.com/program-the-brain-not-the-heartbeat/
 REDDIT_AUTHOR = "buckit"
 REDDIT_SUBREDDIT = "halifax"
 MAX_HISTORY = "10"
+REDDIT_USERNAME = "mutexlabs"
 
 # Secrets (set via: task secret)
 # WEBHOOK_SECRET — required for POST /webhook and MCP write tools

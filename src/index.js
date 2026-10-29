@@ -133,9 +133,10 @@ export function formatDate(iso) {
 const STALE_AFTER_HOURS = 8 * 24;
 
 // How long the pipeline may go without a successful Reddit fetch before it is considered
-// broken. The cron runs hourly, so a few consecutive failures is already abnormal. This is the
-// signal that catches an outage: on 2026-09-11 the cron kept reporting success while being
-// 429'd for ~18h, and no data-age threshold could have seen it.
+// broken. The cron runs every 15 min (5 min on Thursdays), so a few consecutive failures is
+// already abnormal. This is the signal that catches an outage: on 2026-09-11 the (then-hourly)
+// cron kept reporting success while being 429'd for ~18h, and no data-age threshold could have
+// seen it.
 const PIPELINE_STALE_AFTER_HOURS = 3;
 
 /**
@@ -156,7 +157,7 @@ export function predictionAgeHours(updatedAt, now = Date.now()) {
  * Decide whether the scraper itself has gone quiet.
  *
  * Distinct from isPredictionStale: this measures whether we have successfully REACHED Reddit
- * recently, not how old the numbers are. A quiet week is normal; an hourly cron that has not
+ * recently, not how old the numbers are. A quiet week is normal; a cron that has not
  * completed a fetch in hours is not.
  *
  * @param {string|null} lastCheck - ISO timestamp of the last successful fetch, or null.
@@ -555,7 +556,7 @@ class RedditFetchError extends Error {
  *
  * A 429 with no Retry-After (or a long one) is NOT retried: Cloudflare Workers share
  * egress IPs, so re-requesting a throttled endpoint adds load without improving our
- * odds. The hourly cron is the retry in that case.
+ * odds. The next cron run is the retry in that case.
  *
  * @param {string} url
  * @param {object} env
@@ -1377,7 +1378,7 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
         <p>Every Thursday, a Reddit user named <a href="https://www.reddit.com/u/buckit" rel="noopener noreferrer" target="_blank">u/buckit</a> posts the upcoming week&rsquo;s Halifax gas and diesel price predictions to <a href="https://www.reddit.com/r/halifax" rel="noopener noreferrer" target="_blank">r/halifax</a>. This site automatically finds that post, reads the numbers, and displays them in a clean format — so you don&rsquo;t have to dig through Reddit.</p>
         <p>This project was entirely created, deployed, and maintained solely via AI prompts. The only human interaction was purchasing the domain name. Zero lines of human-written code or documentation.</p>
         <h3>How does it work?</h3>
-        <p>A <a href="https://workers.cloudflare.com/" rel="noopener noreferrer" target="_blank">Cloudflare Worker</a> runs every hour. It fetches the newest posts from r/halifax and looks for u/buckit&rsquo;s prediction — the weekly Thursday post, or a mid-week interrupter clause. It parses the markdown table for regular and diesel prices, then stores the result and updates this page, all automatically with no human in the loop.</p>
+        <p>A <a href="https://workers.cloudflare.com/" rel="noopener noreferrer" target="_blank">Cloudflare Worker</a> runs every 15 minutes (every 5 minutes on Thursdays). It fetches the newest posts from r/halifax and looks for u/buckit&rsquo;s prediction — the weekly Thursday post, or a mid-week interrupter clause. It parses the markdown table for regular and diesel prices, then stores the result and updates this page, all automatically with no human in the loop.</p>
         <p>The site also handles <strong>interrupter clause</strong> posts — when the Nova Scotia Utility and Review Board issues an emergency mid-week rate adjustment, those posts are caught too, any day of the week.</p>
         <h3>The meme image</h3>
         <p>When prices go up or down (not &ldquo;no change&rdquo;), the Worker generates a meme image using <a href="https://developers.cloudflare.com/workers-ai/" rel="noopener noreferrer" target="_blank">Cloudflare Workers AI</a> — specifically the <strong>Flux&nbsp;1&nbsp;Schnell</strong> text-to-image model, which runs entirely in Cloudflare&rsquo;s infrastructure.</p>

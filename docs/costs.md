@@ -17,7 +17,7 @@ Buckit is designed to run entirely on free tiers. The only hard cost is the doma
 
 | Service | Usage | Free Limit | Cost |
 |---------|-------|-----------|------|
-| Workers | 1 cron/week + HTTP requests | 100,000 req/day | Free |
+| Workers | ~96 cron invocations/day (288 on Thursdays) + HTTP requests | 100,000 req/day | Free |
 | Workers AI | 1 image/week (Flux 1 Schnell) | 10,000 neurons/day | Free |
 | KV | ~4 keys, tiny payloads | 100,000 reads/day | Free |
 | R2 | ~1 PNG/week (~100–200 KB each) | 10 GB storage, 1M Class B ops/month | Free |

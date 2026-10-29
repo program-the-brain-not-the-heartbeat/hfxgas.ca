@@ -11,6 +11,7 @@ ADRs capture significant decisions made during the design and operation of Bucki
 | [005](./005-deploy-gate-ci.md)                             | Deploy blocked by CI — lint, format, and tests must pass                                 | Accepted |
 | [006](./006-loud-fetch-failures-and-pipeline-heartbeat.md) | Fail loudly on Reddit fetch errors, and measure pipeline health separately from data age | Accepted |
 | [007](./007-community-story-as-scene.md)                   | Meme scene is built from the top community story, not always a gas station               | Accepted |
+| [008](./008-cron-frequency-increase.md)                    | Poll every 15 minutes (5 on Thursdays), not hourly                                       | Accepted |
 
 ## Format
 

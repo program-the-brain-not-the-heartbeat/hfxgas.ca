@@ -79,7 +79,7 @@ graph LR
 
 ## Cron Schedule
 
-Runs **every hour** (`0 * * * *`), 24/7. This ensures new posts — including mid-week **interrupter clause** adjustments — are picked up within an hour of being published.
+Runs **every 15 minutes**, and **every 5 minutes on Thursdays** (`["*/15 * * * *", "*/5 * * * 4"]`), 24/7. Thursday is buckit's usual posting day, so the tighter cadence that day catches a new post sooner; the two triggers overlap at the :00/:15/:30/:45 marks. This ensures new posts — including mid-week **interrupter clause** adjustments — are picked up within minutes of being published.
 
 Each run is idempotent — `last_processed_post_id` in KV prevents double-processing. Posts within the last **7 days** are eligible (not just 24 hours) to handle interrupter clauses on any weekday.
 
