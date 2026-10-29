@@ -1195,7 +1195,7 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
     .sign-meta { display:flex; flex-direction:column; align-items:center; gap:0.2rem; width:100%; }
     .updated-at { font-size:0.68rem; color:hsl(240 4% 36%); margin-bottom:0.2rem; }
     .updated-at--stale { color:hsl(38 92% 62%); font-weight:600; }
-    .notes { font-size:0.77rem; color:hsl(240 4% 44%); max-width:38ch; line-height:1.6; margin-bottom:0.5rem; padding:0.4rem 0.7rem; background:hsl(240 6% 12%); border-left:2px solid ${accentColor}50; border-radius:0 calc(var(--radius)*0.6) calc(var(--radius)*0.6) 0; text-align:left; font-style:italic; }
+    .notes { font-size:0.77rem; color:hsl(240 4% 44%); max-width:38ch; line-height:1.6; margin-bottom:0.5rem; padding:0.4rem 0.7rem; background:hsl(240 6% 12%); border-radius:calc(var(--radius)*0.6); text-align:left; font-style:italic; }
     .disclaimer { font-size:0.67rem; color:hsl(240 4% 32%); line-height:1.7; }
     .disclaimer a { color:hsl(240 4% 42%); text-decoration:underline; text-underline-offset:2px; }
     .disclaimer a:hover { color:hsl(240 5% 60%); }
@@ -1282,11 +1282,10 @@ export function renderHtml({ prediction, history, imageKey, siteUrl, imagePrompt
       @keyframes fadeSlideIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
       .modal-backdrop.open .modal { animation:modalIn 0.2s cubic-bezier(0.16,1,0.3,1); }
       @keyframes modalIn { from{opacity:0;transform:translateY(6px) scale(0.98)} to{opacity:1;transform:translateY(0) scale(1)} }
-      .fuel-arrow { animation:arrowBounce 2.2s cubic-bezier(0.37,0,0.63,1) infinite; }
-      @keyframes arrowBounce {
+      .fuel-arrow { animation:arrowNudge 2.2s cubic-bezier(0.16,1,0.3,1) infinite; }
+      @keyframes arrowNudge {
         0%,100%{transform:translateY(0) scale(1)}
-        40%{transform:translateY(${isUp ? '-7px' : isDown ? '7px' : '0'}) scale(${isUp || isDown ? '1.04' : '1.06'})}
-        60%{transform:translateY(${isUp ? '-4px' : isDown ? '4px' : '0'}) scale(${isUp || isDown ? '1.02' : '1.03'})}
+        50%{transform:translateY(${isUp ? '-5px' : isDown ? '5px' : '0'}) scale(${isUp || isDown ? '1.03' : '1.04'})}
       }
       .sign-board { animation:signReveal 0.35s cubic-bezier(0.16,1,0.3,1) forwards; }
       @keyframes signReveal { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
