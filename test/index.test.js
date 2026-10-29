@@ -305,12 +305,22 @@ describe('getSeason', () => {
 
 describe('buildImagePrompt', () => {
   // Community context path
-  it('uses community context when provided', () => {
+  it('uses community context as the scene when provided', () => {
     const ctx = ['Pothole on Quinpool', 'Bridge closure update'];
     const prompt = buildImagePrompt('up', 'abc', ctx);
-    expect(prompt).toContain('This week in Halifax and Nova Scotia');
+    expect(prompt).toContain('top Halifax/Nova Scotia news');
     expect(prompt).toContain('Pothole on Quinpool');
     expect(prompt).toContain('Bridge closure update');
+  });
+  it('does not force the Irving Oil gas station setting when community context provided', () => {
+    const ctx = ['Pothole on Quinpool'];
+    const prompt = buildImagePrompt('up', 'abc', ctx);
+    expect(prompt).not.toContain('Irving Oil');
+  });
+  it('still reflects price direction as mood when community context provided', () => {
+    const ctx = ['Pothole on Quinpool'];
+    expect(buildImagePrompt('up', 'abc', ctx)).toContain('going UP');
+    expect(buildImagePrompt('down', 'abc', ctx)).toContain('going DOWN');
   });
   it('does not contain season strings when community context provided', () => {
     const ctx = ['Ferry delay again'];
@@ -326,10 +336,13 @@ describe('buildImagePrompt', () => {
     expect(prompt).not.toContain('A'.repeat(80));
     expect(prompt).toContain('A'.repeat(60));
   });
-  it('uses at most 20 titles from community context', () => {
+  it('uses at most the top 3 titles from community context', () => {
     const ctx = Array.from({ length: 25 }, (_, i) => `Topic ${i}`);
     const prompt = buildImagePrompt('up', 'abc', ctx);
-    expect(prompt).not.toContain('Topic 20');
+    expect(prompt).toContain('Topic 0');
+    expect(prompt).toContain('Topic 1');
+    expect(prompt).toContain('Topic 2');
+    expect(prompt).not.toContain('Topic 3');
     expect(prompt).not.toContain('Topic 24');
   });
   // Season fallback path (empty context)
@@ -496,6 +509,37 @@ describe('fetchCommunityContext', () => {
     const urls = global.fetch.mock.calls.map(([url]) => url);
     expect(urls.some((u) => u.includes('r/halifax/top.rss'))).toBe(true);
     expect(urls.some((u) => u.includes('r/novascotia/top.rss'))).toBe(true);
+  });
+
+  it('interleaves results by rank so a leading slice blends both subreddits', async () => {
+    let callCount = 0;
+    global.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      const sub = callCount === 1 ? 'h' : 'ns';
+      return Promise.resolve({
+        ok: true,
+        text: async () =>
+          makeRssXml([
+            {
+              author: 'user1',
+              title: `${sub}-top1`,
+              id: `${sub}1`,
+              permalink: `/r/${sub}/comments/${sub}1/`,
+              created_utc: now,
+            },
+            {
+              author: 'user2',
+              title: `${sub}-top2`,
+              id: `${sub}2`,
+              permalink: `/r/${sub}/comments/${sub}2/`,
+              created_utc: now,
+            },
+          ]),
+      });
+    });
+    const titles = await fetchCommunityContext(mockEnv);
+    // halifax #1, novascotia #1, halifax #2, novascotia #2 — not halifax's two then novascotia's two
+    expect(titles).toEqual(['h-top1', 'ns-top1', 'h-top2', 'ns-top2']);
   });
 
   it('excludes posts authored by buckit (case-insensitive)', async () => {
@@ -2115,7 +2159,7 @@ describe('scheduled()', () => {
     await worker.scheduled({}, e, {});
     // The AI.run should have been called with a prompt containing community context
     const promptArg = e.AI.run.mock.calls[0][1].prompt;
-    expect(promptArg).toContain('This week in Halifax and Nova Scotia');
+    expect(promptArg).toContain('top Halifax/Nova Scotia news');
     expect(promptArg).toContain('Pothole on Quinpool');
   });
 });
