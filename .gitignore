@@ -16,6 +16,9 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 
+# Claude Code local settings — per-machine permission overrides, never shared
+.claude/settings.local.json
+
 # Test output
 *.lcov
 
