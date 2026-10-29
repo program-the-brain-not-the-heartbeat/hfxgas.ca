@@ -781,6 +781,31 @@ describe('parseRedditPost', () => {
     expect(r.notes).toBeNull();
   });
 
+  it('HTML single-<p> table (unrecognized markdown table, RSS): parses rows, strips table syntax from notes', () => {
+    // Reddit renders a markdown table it doesn't recognize as valid (e.g. a separator
+    // row missing its leading pipe) as one plain <p> with <br/>-joined lines instead of
+    // a real <table> — confirmed against the live RSS feed for a real buckit post.
+    const selftext =
+      '<div class="md"><p>|Type|Adjustment|New Min Price|<br/> :—| :—| :—|<br/> ' +
+      '|Regular| DOWN 0.7|181.6|<br/> |Diesel| DOWN 1.2| 266.6|</p> </div>';
+    const r = parseRedditPost({ title: 'Weekly Gas Post', selftext });
+    expect(r.gas.direction).toBe('down');
+    expect(r.gas.adjustment).toBeCloseTo(0.7);
+    expect(r.gas.price).toBeCloseTo(1.816);
+    expect(r.diesel.direction).toBe('down');
+    expect(r.diesel.adjustment).toBeCloseTo(1.2);
+    expect(r.diesel.price).toBeCloseTo(2.666);
+    expect(r.notes).toBeNull();
+  });
+
+  it('HTML single-<p> table: keeps free-text notes alongside unrecognized table lines', () => {
+    const selftext =
+      '<div class="md"><p>|Type|Adjustment|New Min Price|<br/> :—| :—| :—|<br/> ' +
+      '|Regular| UP 2.0|165.0|<br/>May be +/- .01</p></div>';
+    const r = parseRedditPost({ title: 'Weekly Gas Post', selftext });
+    expect(r.notes).toBe('May be +/- .01');
+  });
+
   // ── Free-text fallback ──────────────────────────────────────────────────────
   it('free-text: detects up direction', () => {
     const r = parseRedditPost({ title: 'Gas prices going up this week', selftext: '' });

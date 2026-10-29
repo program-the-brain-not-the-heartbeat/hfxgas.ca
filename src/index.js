@@ -412,20 +412,24 @@ export function parseRedditPost(post) {
   }
 
   // ── Notes ──────────────────────────────────────────────────────────────
-  // For HTML selftext (RSS feed): extract text from <p> tags only.
+  // For HTML selftext (RSS feed): extract text from <p> tags, split on <br/> (Reddit
+  // renders an unrecognized markdown table — e.g. a separator row missing its leading
+  // pipe — as one plain <p> with <br/>-joined lines rather than a real <table>), then
+  // drop any line that is itself table syntax, same as the markdown branch below.
   // For markdown selftext: filter out pipe-table lines and join the rest.
   let notesText;
   if (/<td[^>]*>|<table|<div class="md">/i.test(selftext)) {
     const pMatches = [...selftext.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)];
     notesText = pMatches
-      .map((pm) => pm[1].replace(/<[^>]+>/g, '').trim())
-      .filter(Boolean)
+      .flatMap((pm) => pm[1].split(/<br\s*\/?>/i))
+      .map((line) => line.replace(/<[^>]+>/g, '').trim())
+      .filter((line) => line.length > 0 && !/^\|/.test(line) && !/^:[-—]/.test(line))
       .join(' ')
       .trim();
   } else {
     notesText = selftext
       .split('\n')
-      .filter((l) => !/^\|/.test(l.trim()) && !/^:-/.test(l.trim()))
+      .filter((l) => !/^\|/.test(l.trim()) && !/^:[-—]/.test(l.trim()))
       .join(' ')
       .trim();
   }
