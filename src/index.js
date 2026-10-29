@@ -225,11 +225,15 @@ export function getSeason(date) {
 
 /**
  * Build a community-aware, MEME-worthy image generation prompt.
- * Uses top r/halifax + r/novascotia post titles as context when available;
- * falls back to season-based context if community context is empty.
+ * The scene is built from this week's top r/halifax + r/novascotia story when available
+ * (gas price direction becomes mood/subtext rather than the setting); falls back to
+ * season-based context — with the Irving Oil gas station setting — when community
+ * context is empty. See ADR-007.
  * @param {'up'|'down'} direction
  * @param {string} postId - used as deterministic seed context
- * @param {string[]} [communityContext] - top post titles from r/halifax + r/novascotia
+ * @param {string[]} [communityContext] - top post titles from r/halifax + r/novascotia,
+ *   pre-ranked/interleaved by fetchCommunityContext() so the first entries are the week's
+ *   top stories across both subreddits
  * @param {Date} [date] - used for season fallback
  * @returns {string}
  */
@@ -237,19 +241,36 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
   const directionLabel = direction === 'up' ? 'going UP' : 'going DOWN';
   const mood =
     direction === 'up'
-      ? 'suffering, despair, Nova Scotians crying at the pump'
-      : 'celebration, relief, Nova Scotians cheering at a cheap fill-up';
+      ? 'suffering, despair, Nova Scotians crying'
+      : 'celebration, relief, Nova Scotians cheering';
 
-  let contextStr;
+  // Pick a random real NS street for location grounding
+  const streets = [
+    'Quinpool Road Halifax',
+    'Spring Garden Road Halifax',
+    'Barrington Street Halifax',
+    'Gottingen Street Halifax',
+    'Agricola Street Halifax',
+    'Portland Street Dartmouth',
+    'Prince Street Sydney Cape Breton',
+    'Charlotte Street Sydney Cape Breton',
+    'Commercial Street Truro',
+    'Main Street Antigonish',
+  ];
+  const street = streets[Math.abs(postId.charCodeAt(0) + postId.charCodeAt(1)) % streets.length];
+
+  let sceneStr;
   if (communityContext.length > 0) {
-    // Use actual community topics from r/halifax + r/novascotia this week
-    const topics = communityContext
-      .slice(0, 20)
+    // Scene depicts this week's top community stories directly — gas price
+    // direction is mood/subtext only, not the setting (ADR-007).
+    const topStories = communityContext
+      .slice(0, 3)
       .map((t) => t.slice(0, 60).trim())
       .join('; ');
-    contextStr = 'This week in Halifax and Nova Scotia: ' + topics;
+    sceneStr =
+      `Scene depicts this week's top Halifax/Nova Scotia news: ${topStories}. ` + `Near ${street}.`;
   } else {
-    // Fallback: season-based context with real Nova Scotia locations
+    // Fallback: season-based Irving Oil gas station context, unchanged from before ADR-007.
     const season = getSeason(date);
     const weatherContexts = {
       winter:
@@ -265,29 +286,14 @@ export function buildImagePrompt(direction, postId, communityContext = [], date 
         'Nova Scotia fall foliage on the Cabot Trail near Cheticamp, Highway 104 near Truro, ' +
         'thick Annapolis Valley fog on Commercial Street Kentville, East Coast rain on Grafton Street Halifax',
     };
-    contextStr = weatherContexts[season];
+    sceneStr =
+      `${weatherContexts[season]}. ` +
+      `Setting: Irving Oil gas station with prominent real red-and-yellow Irving Oil logo on sign, ${street}.`;
   }
 
-  // Pick a random real NS gas station street for variety
-  const stationStreets = [
-    'Quinpool Road Halifax',
-    'Spring Garden Road Halifax',
-    'Barrington Street Halifax',
-    'Gottingen Street Halifax',
-    'Agricola Street Halifax',
-    'Portland Street Dartmouth',
-    'Prince Street Sydney Cape Breton',
-    'Charlotte Street Sydney Cape Breton',
-    'Commercial Street Truro',
-    'Main Street Antigonish',
-  ];
-  const street =
-    stationStreets[Math.abs(postId.charCodeAt(0) + postId.charCodeAt(1)) % stationStreets.length];
-
   return (
-    `Photorealistic meme photograph, Nova Scotia Canada. Gas prices ${directionLabel} this week. ` +
-    `${contextStr}. ${mood}. ` +
-    `Setting: Irving Oil gas station with prominent real red-and-yellow Irving Oil logo on sign, ${street}. ` +
+    `Photorealistic meme photograph, Nova Scotia Canada. ${sceneStr} ` +
+    `Mood reflects gas prices ${directionLabel} this week: ${mood}. ` +
     'Real legible Nova Scotia street signage, realistic faces, cinematic photography, meme-worthy composition. ' +
     'No cartoons, no illustrations, no watermarks. ' +
     `Seed context: ${postId.slice(0, 8)}.`
@@ -718,8 +724,12 @@ async function fetchBuckitPost(env) {
 /**
  * Fetch top community post titles from r/halifax and r/novascotia for image prompt context.
  * Runs both fetches in parallel via Promise.allSettled; gracefully handles individual failures.
+ *
+ * Results are interleaved (halifax #1, novascotia #1, halifax #2, ...) rather than
+ * concatenated, so that buildImagePrompt()'s leading slice is a genuine blend of both
+ * subreddits' top stories instead of just r/halifax's (ADR-007).
  * @param {object} env
- * @returns {Promise<string[]>} Up to 20 post titles (10 per subreddit)
+ * @returns {Promise<string[]>} Up to 20 post titles (10 per subreddit), interleaved by rank
  */
 export async function fetchCommunityContext(env) {
   const subreddits = ['halifax', 'novascotia'];
@@ -739,7 +749,14 @@ export async function fetchCommunityContext(env) {
         .catch(() => [])
     )
   );
-  return results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  const [halifax, novascotia] = results.map((r) => (r.status === 'fulfilled' ? r.value : []));
+
+  const interleaved = [];
+  for (let i = 0; i < Math.max(halifax.length, novascotia.length); i++) {
+    if (halifax[i]) interleaved.push(halifax[i]);
+    if (novascotia[i]) interleaved.push(novascotia[i]);
+  }
+  return interleaved;
 }
 
 // ── AI Image Generation ──────────────────────────────────────────────────────
