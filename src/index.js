@@ -628,7 +628,7 @@ const REDDIT_TOKEN_KEY = 'reddit_access_token';
  * @returns {Promise<string|null>}
  */
 async function getRedditToken(env) {
-  if (!env.REDDIT_CLIENT_ID || !env.REDDIT_CLIENT_SECRET) return null;
+  if (!env.REDDIT_CLIENT_ID) return null;
 
   const cached = await env.PREDICTIONS.get(REDDIT_TOKEN_KEY);
   if (cached) return cached;
@@ -636,11 +636,16 @@ async function getRedditToken(env) {
   const res = await fetch('https://www.reddit.com/api/v1/access_token', {
     method: 'POST',
     headers: {
-      Authorization: `Basic ${btoa(`${env.REDDIT_CLIENT_ID}:${env.REDDIT_CLIENT_SECRET}`)}`,
+      Authorization: `Basic ${btoa(`${env.REDDIT_CLIENT_ID}:${env.REDDIT_CLIENT_SECRET || ''}`)}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': env.REDDIT_USER_AGENT,
     },
-    body: 'grant_type=client_credentials',
+    body: env.REDDIT_CLIENT_SECRET
+      ? 'grant_type=client_credentials'
+      : new URLSearchParams({
+          grant_type: 'https://oauth.reddit.com/grants/installed_client',
+          device_id: 'DO_NOT_TRACK_THIS_DEVICE',
+        }).toString(),
   });
 
   if (!res.ok) {

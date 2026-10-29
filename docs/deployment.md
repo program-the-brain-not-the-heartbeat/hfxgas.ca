@@ -56,7 +56,30 @@ task secret
 
 Enter a long, random string when prompted. This is your `WEBHOOK_SECRET` — store it securely (e.g. in a password manager). You'll need it to use `POST /webhook` and MCP write tools.
 
-### 6. Deploy
+### 6. Configure Reddit OAuth (Optional)
+
+For an installed Reddit app, set the client ID and leave `REDDIT_CLIENT_SECRET` unset:
+
+```sh
+npx wrangler secret put REDDIT_CLIENT_ID
+```
+
+If switching from a web/script app, remove its existing secret:
+
+```sh
+npx wrangler secret delete REDDIT_CLIENT_SECRET
+```
+
+The Worker uses the `installed_client` grant with an empty Basic Auth password and
+`device_id=DO_NOT_TRACK_THIS_DEVICE`. Web/script apps remain supported: set both
+`REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` to use `client_credentials` instead.
+Without a client ID, or if OAuth fails, the Worker falls back to Reddit RSS.
+
+For local development, set `REDDIT_CLIENT_ID` in `.dev.vars` and omit the secret
+for installed apps. Configure a descriptive `REDDIT_USER_AGENT` identifying your
+app and Reddit username; keep personal configuration out of commits.
+
+### 7. Deploy
 
 ```sh
 task deploy

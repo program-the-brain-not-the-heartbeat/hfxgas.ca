@@ -1738,6 +1738,44 @@ describe('scheduled()', () => {
     expect(stored.gas.direction).toBe('up');
   });
 
+  it('uses client_credentials and Basic auth for web/script apps', async () => {
+    global.fetch = mockFetchForOauth();
+    await worker.scheduled({}, envWithCreds(), {});
+
+    const [, options] = global.fetch.mock.calls.find(([url]) => url.includes('access_token'));
+    expect(options.headers.Authorization).toBe(
+      `Basic ${btoa('test-client-id:test-client-secret')}`
+    );
+    expect(options.body).toBe('grant_type=client_credentials');
+  });
+
+  it.each([undefined, ''])('uses installed_client when the secret is %s', async (secret) => {
+    global.fetch = mockFetchForOauth({ post: tablePost() });
+    const installedEnv = envWithCreds({ REDDIT_CLIENT_SECRET: secret });
+    await worker.scheduled({}, installedEnv, {});
+
+    const [, options] = global.fetch.mock.calls.find(([url]) => url.includes('access_token'));
+    expect(options.headers.Authorization).toBe(`Basic ${btoa('test-client-id:')}`);
+    expect(options.headers['User-Agent']).toBe(installedEnv.REDDIT_USER_AGENT);
+    expect(Object.fromEntries(new URLSearchParams(options.body))).toEqual({
+      grant_type: 'https://oauth.reddit.com/grants/installed_client',
+      device_id: 'DO_NOT_TRACK_THIS_DEVICE',
+    });
+    expect(JSON.parse(await env.PREDICTIONS.get('latest_prediction')).gas.direction).toBe('up');
+    expect(await env.PREDICTIONS.get('reddit_access_token')).toBe('tok-abc');
+
+    global.fetch = mockFetchForOauth();
+    await worker.scheduled({}, installedEnv, {});
+    expect(global.fetch.mock.calls.some(([url]) => url.includes('access_token'))).toBe(false);
+  });
+
+  it('falls back to RSS when an installed-app token request fails', async () => {
+    global.fetch = mockFetchForOauth({ post: tablePost(), tokenOk: false });
+    await worker.scheduled({}, envWithCreds({ REDDIT_CLIENT_SECRET: undefined }), {});
+    expect(global.fetch.mock.calls.some(([url]) => url.includes('new.rss'))).toBe(true);
+    expect(await env.PREDICTIONS.get('latest_prediction')).not.toBeNull();
+  });
+
   it('caches the access token in KV and reuses it', async () => {
     global.fetch = mockFetchForOauth({ post: tablePost() });
     await worker.scheduled({}, envWithCreds(), {});
